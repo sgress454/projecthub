@@ -3,9 +3,10 @@ set -euo pipefail
 
 INSTALL_DIR="$HOME/.local/bin"
 PLIST_DIR="$HOME/Library/LaunchAgents"
-PLIST_NAME="com.projecthub.plist"
+SERVICE_LABEL="com.projecthub"
+PLIST_NAME="${SERVICE_LABEL}.plist"
 
-launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+launchctl bootout "gui/$(id -u)/$SERVICE_LABEL" 2>/dev/null || true
 killall projecthub 2>/dev/null || true
 killall ProjectHub 2>/dev/null || true
 

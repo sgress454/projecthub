@@ -43,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu
 
+    private func refreshActiveSpace() {
+        activeSpaceNumber = SpaceDetector.currentSpaceNumber()
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.delegate = self
@@ -56,7 +60,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             empty.target = self
         } else {
-            activeSpaceNumber = SpaceDetector.currentSpaceNumber()
             for project in projects.sorted(by: { $0.space < $1.space }) {
                 let marker = (project.space == activeSpaceNumber) ? "●" : " "
                 let title = "\(marker)  \(project.name)    Space \(project.space)"
@@ -109,6 +112,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         SpaceSwitcher.switchTo(space: project.space)
+        // Optimistically mark the clicked project's Space as active so the
+        // highlight is correct next time the menu opens, without waiting for
+        // the detector poll to pick up the switch.
+        activeSpaceNumber = project.space
+        rebuildMenu()
     }
 
     @objc private func openEditWindow() {
@@ -120,6 +128,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setContentSize(NSSize(width: 440, height: 380))
             window.styleMask = [.titled, .closable, .resizable]
             window.isReleasedWhenClosed = false
+            // Follow the user when they switch Spaces, rather than pulling them
+            // back to whichever Space the window was last on.
+            window.collectionBehavior.insert(.moveToActiveSpace)
             window.center()
             editWindow = window
         }
@@ -139,6 +150,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.setContentSize(NSSize(width: 520, height: 460))
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
+            window.collectionBehavior.insert(.moveToActiveSpace)
             window.center()
             onboardingWindow = window
         }
@@ -174,13 +186,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_: NSMenu) {
-        // Rebuild once immediately in case Space changed, then tick periodically
-        // in case the user triggers a switch via another tool while the menu is open.
+        // Refresh once immediately in case Space changed via another tool, then
+        // tick periodically while the menu is open.
+        refreshActiveSpace()
         rebuildMenu()
         activeSpaceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             let latest = SpaceDetector.currentSpaceNumber()
             if latest != self.activeSpaceNumber {
+                self.activeSpaceNumber = latest
                 self.rebuildMenu()
             }
         }
