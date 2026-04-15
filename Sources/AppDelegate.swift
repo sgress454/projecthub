@@ -6,20 +6,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var cancellables = Set<AnyCancellable>()
     private var activeSpaceNumber: Int?
-    private var activeSpaceTimer: Timer?
+    private var spaceChangeObserver: NSObjectProtocol?
 
     private var editWindow: NSWindow?
     private var onboardingWindow: NSWindow?
 
+    private static let showNameKey = "ProjectHub.showActiveProjectNameInMenuBar"
+    private var showNameInMenuBar: Bool {
+        get { UserDefaults.standard.bool(forKey: Self.showNameKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.showNameKey) }
+    }
+
     func applicationDidFinishLaunching(_: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        configureStatusButton()
+        updateStatusButton()
 
         ProjectStore.shared.$projects
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.rebuildMenu() }
+            .sink { [weak self] _ in
+                self?.updateStatusButton()
+                self?.rebuildMenu()
+            }
             .store(in: &cancellables)
 
+        // macOS pushes an event whenever the active Space changes — from us,
+        // from Ctrl+N, from Mission Control, from trackpad swipes. Use it to
+        // keep the highlight current without polling.
+        spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.refreshActiveSpace()
+            self.updateStatusButton()
+            self.rebuildMenu()
+        }
+
+        refreshActiveSpace()
+        updateStatusButton()
         rebuildMenu()
 
         if !UserDefaults.standard.bool(forKey: "ProjectHub.onboardingShown") {
@@ -31,13 +56,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu bar button
 
-    private func configureStatusButton() {
+    private func activeProject() -> Project? {
+        guard let n = activeSpaceNumber else { return nil }
+        return ProjectStore.shared.projects.first { $0.space == n }
+    }
+
+    // Keep the menu-bar name short enough that macOS doesn't hide the entire
+    // status item when the bar is crowded. 20 characters fits comfortably next
+    // to the icon on most setups; longer names get an ellipsis.
+    private static let maxMenuBarNameChars = 20
+
+    private func truncatedForMenuBar(_ name: String) -> String {
+        guard name.count > Self.maxMenuBarNameChars else { return name }
+        let keep = name.prefix(Self.maxMenuBarNameChars - 1)
+        return "\(keep)…"
+    }
+
+    private func updateStatusButton() {
         guard let button = statusItem.button else { return }
+
+        // Always keep the icon visible so the menu bar entry has context.
         if let image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ProjectHub") {
             image.isTemplate = true
             button.image = image
+            button.imagePosition = .imageLeft
+        }
+
+        if showNameInMenuBar, let project = activeProject() {
+            button.title = " \(truncatedForMenuBar(project.name))"
         } else {
-            button.title = "PH"
+            button.title = ""
         }
     }
 
@@ -85,6 +133,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         edit.target = self
 
+        let showName = menu.addItem(
+            withTitle: "Show Active Project Name in Menu Bar",
+            action: #selector(toggleShowNameInMenuBar),
+            keyEquivalent: ""
+        )
+        showName.target = self
+        showName.state = showNameInMenuBar ? .on : .off
+
         let help = menu.addItem(
             withTitle: "Setup Guide",
             action: #selector(showOnboarding),
@@ -116,6 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // highlight is correct next time the menu opens, without waiting for
         // the detector poll to pick up the switch.
         activeSpaceNumber = project.space
+        updateStatusButton()
+        rebuildMenu()
+    }
+
+    @objc private func toggleShowNameInMenuBar() {
+        showNameInMenuBar.toggle()
+        updateStatusButton()
         rebuildMenu()
     }
 
@@ -182,26 +245,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - NSMenuDelegate (active-space refresh)
+// MARK: - NSMenuDelegate
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_: NSMenu) {
-        // Refresh once immediately in case Space changed via another tool, then
-        // tick periodically while the menu is open.
+        // Safety refresh on open; the notification handler normally keeps this in sync.
         refreshActiveSpace()
+        updateStatusButton()
         rebuildMenu()
-        activeSpaceTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let latest = SpaceDetector.currentSpaceNumber()
-            if latest != self.activeSpaceNumber {
-                self.activeSpaceNumber = latest
-                self.rebuildMenu()
-            }
-        }
-    }
-
-    func menuDidClose(_: NSMenu) {
-        activeSpaceTimer?.invalidate()
-        activeSpaceTimer = nil
     }
 }
