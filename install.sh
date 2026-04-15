@@ -5,11 +5,68 @@ INSTALL_DIR="$HOME/.local/bin"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 SERVICE_LABEL="com.projecthub"
 PLIST_NAME="${SERVICE_LABEL}.plist"
+SIGN_IDENTITY="ProjectHub Self-Signed"
+LOGIN_KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 cd "$(dirname "$0")"
 
+# --- Stable code signing identity ---
+# Swift's default ad-hoc signature changes every rebuild, which makes TCC
+# treat the new binary as a stranger and invalidate the Accessibility grant.
+# A persistent self-signed cert in the login keychain gives every rebuild
+# the same designated requirement, so the grant sticks.
+ensure_signing_identity() {
+    if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+        return 0
+    fi
+
+    echo "Creating self-signed code signing certificate '$SIGN_IDENTITY'..."
+    local tmpdir
+    tmpdir=$(mktemp -d)
+
+    cat > "$tmpdir/ext.conf" <<EOF
+[req]
+distinguished_name = dn
+x509_extensions = v3_ext
+prompt = no
+[dn]
+CN = $SIGN_IDENTITY
+[v3_ext]
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+basicConstraints = critical, CA:FALSE
+EOF
+
+    /usr/bin/openssl genrsa -out "$tmpdir/key.pem" 2048 2>/dev/null
+    /usr/bin/openssl req -x509 -new -nodes -key "$tmpdir/key.pem" -sha256 \
+        -days 3650 -out "$tmpdir/cert.pem" -config "$tmpdir/ext.conf" 2>/dev/null
+    # LibreSSL's empty-password p12 MAC doesn't verify under macOS's
+    # `security import` — use a transient password instead. The p12 is
+    # deleted seconds after the import, so the value is just a bridge.
+    local pw="projecthub-transient-$$"
+    /usr/bin/openssl pkcs12 -export \
+        -out "$tmpdir/cert.p12" -inkey "$tmpdir/key.pem" -in "$tmpdir/cert.pem" \
+        -name "$SIGN_IDENTITY" -passout "pass:$pw" 2>/dev/null
+
+    security import "$tmpdir/cert.p12" \
+        -k "$LOGIN_KEYCHAIN" \
+        -T /usr/bin/codesign -P "$pw" >/dev/null
+
+    rm -rf "$tmpdir"
+
+    echo "Certificate installed. macOS may prompt once for keychain access"
+    echo "the first time codesign uses it — click 'Always Allow'."
+}
+
+ensure_signing_identity
+
 echo "Building ProjectHub (release)..."
 swift build -c release 2>&1
+
+echo "Signing binary with '$SIGN_IDENTITY'..."
+codesign --force --sign "$SIGN_IDENTITY" \
+    --preserve-metadata=identifier,entitlements \
+    .build/release/ProjectHub
 
 echo "Installing binary to $INSTALL_DIR/projecthub..."
 mkdir -p "$INSTALL_DIR"
@@ -47,4 +104,7 @@ echo "Done! ProjectHub is now running in your menu bar."
 echo "It will auto-start on login."
 echo ""
 echo "First run: you'll be asked to grant Accessibility permission."
+echo "The binary is signed with a stable identity, so that grant will"
+echo "persist across future reinstalls — no need to re-toggle it in Settings."
+echo ""
 echo "To uninstall:  bash $(pwd)/uninstall.sh"

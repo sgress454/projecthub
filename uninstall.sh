@@ -15,3 +15,6 @@ rm -f "$INSTALL_DIR/projecthub"
 
 echo "ProjectHub uninstalled."
 echo "(Your projects.json at ~/Library/Application Support/ProjectHub/ was left in place.)"
+echo "(The 'ProjectHub Self-Signed' code signing cert in your login keychain was"
+echo " also left in place — a future reinstall will reuse it so the Accessibility"
+echo " grant survives. Delete it manually via Keychain Access if you don't want it.)"
