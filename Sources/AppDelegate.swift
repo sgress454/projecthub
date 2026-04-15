@@ -108,19 +108,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             empty.target = self
         } else {
+            // Use tab stops so the "Space N" column lines up regardless of how
+            // wide each project name renders in the menu font.
+            let menuFont = NSFont.menuFont(ofSize: 0)
+            let fontAttrs: [NSAttributedString.Key: Any] = [.font: menuFont]
+            let maxNameWidth = projects
+                .map { ($0.name as NSString).size(withAttributes: fontAttrs).width }
+                .max() ?? 0
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.tabStops = [
+                NSTextTab(textAlignment: .left, location: 18),
+                NSTextTab(textAlignment: .left, location: 18 + maxNameWidth + 28),
+            ]
+            let titleAttrs: [NSAttributedString.Key: Any] = [
+                .font: menuFont,
+                .paragraphStyle: paragraph,
+            ]
+
             for project in projects.sorted(by: { $0.space < $1.space }) {
                 let marker = (project.space == activeSpaceNumber) ? "●" : " "
-                let title = "\(marker)  \(project.name)    Space \(project.space)"
+                let titleString = "\(marker)\t\(project.name)\tSpace \(project.space)"
                 let item = menu.addItem(
-                    withTitle: title,
+                    withTitle: "",
                     action: #selector(projectClicked(_:)),
                     keyEquivalent: ""
                 )
                 item.target = self
                 item.representedObject = project.id
-                if project.space == activeSpaceNumber {
-                    item.state = .on
-                }
+                item.attributedTitle = NSAttributedString(string: titleString, attributes: titleAttrs)
             }
         }
 
