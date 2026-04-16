@@ -318,17 +318,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             number = url.lastPathComponent
         }
         guard let info else { return number }
-        var label = "\(number) \u{2014} \(info.title)"
-        let stateTag: String
-        switch info.state {
-        case "OPEN": stateTag = ""
-        case "MERGED": stateTag = " (merged)"
-        case "CLOSED": stateTag = " (closed)"
-        default: stateTag = " (\(info.state.lowercased()))"
-        }
-        label += stateTag
+
+        // assignee icon + number + title + state + comments
+        let assigneeIcon = info.hasAssignees ? "\u{1F464}" : "\u{25CB}" // 👤 or ○
+        var label = "\(assigneeIcon) \(number) \u{2014} \(info.title) (\(info.displayState))"
         if info.unresolvedCommentCount > 0 {
-            label += "  [\(info.unresolvedCommentCount) comment\(info.unresolvedCommentCount == 1 ? "" : "s")]"
+            label += "  \u{1F4AC}\(info.unresolvedCommentCount)" // 💬N
         }
         return label
     }

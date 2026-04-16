@@ -4,28 +4,42 @@ import AppKit
 /// `NSMenuItem` in the project submenu. Non-interactive.
 final class SummaryMenuItemView: NSView {
     private let textField = NSTextField(wrappingLabelWithString: "")
+    private static let viewWidth: CGFloat = 380
+    private static let horizontalPadding: CGFloat = 14
+    private static let verticalPadding: CGFloat = 4
 
     init(text: String) {
-        super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 20))
+        let width = Self.viewWidth
+        let textWidth = width - Self.horizontalPadding * 2
+
+        super.init(frame: .zero)
+
         textField.stringValue = text
         textField.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         textField.textColor = .secondaryLabelColor
         textField.isSelectable = false
-        textField.translatesAutoresizingMaskIntoConstraints = false
-        textField.preferredMaxLayoutWidth = 260
+        textField.isEditable = false
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.lineBreakMode = .byWordWrapping
+        textField.preferredMaxLayoutWidth = textWidth
+
+        // Calculate the actual height the text needs.
+        let textHeight = textField.sizeThatFits(
+            NSSize(width: textWidth, height: .greatestFiniteMagnitude)
+        ).height
+        let totalHeight = textHeight + Self.verticalPadding * 2
+
+        frame = NSRect(x: 0, y: 0, width: width, height: totalHeight)
+
+        textField.frame = NSRect(
+            x: Self.horizontalPadding,
+            y: Self.verticalPadding,
+            width: textWidth,
+            height: textHeight
+        )
         addSubview(textField)
-        NSLayoutConstraint.activate([
-            textField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
-            textField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            textField.topAnchor.constraint(equalTo: topAnchor, constant: 4),
-            textField.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-        ])
     }
 
     required init?(coder: NSCoder) { fatalError("not implemented") }
-
-    override var intrinsicContentSize: NSSize {
-        let textSize = textField.intrinsicContentSize
-        return NSSize(width: 280, height: textSize.height + 8)
-    }
 }

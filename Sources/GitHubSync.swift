@@ -173,7 +173,7 @@ final class GitHubSync {
         ]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        process.environment = ["PATH": ClaudeCLI.augmentedPATH]
+        process.environment = Self.ghEnvironment()
         let pipe = Pipe()
         process.standardOutput = pipe
         do {
@@ -194,58 +194,121 @@ final class GitHubSync {
         }
     }
 
+    private static func ghEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = ClaudeCLI.augmentedPATH
+        return env
+    }
+
     private func fetchPRInfo(repo: String, number: Int, url: URL) -> GitHubPRInfo {
-        guard let ghPath = GitHubCLI.resolve() else {
-            return GitHubPRInfo(number: number, title: "#\(number)", url: url, state: "OPEN", unresolvedCommentCount: 0)
-        }
+        let fallback = GitHubPRInfo(number: number, title: "#\(number)", url: url, state: "OPEN")
+        guard let ghPath = GitHubCLI.resolve() else { return fallback }
+
+        // Basic PR metadata via gh pr view.
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ghPath)
         process.arguments = [
             "pr", "view", "\(number)",
             "--repo", repo,
-            "--json", "number,title,url,state,author,reviews,comments",
+            "--json", "number,title,url,state,isDraft,reviewDecision,assignees,author",
         ]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        process.environment = ["PATH": ClaudeCLI.augmentedPATH]
+        process.environment = Self.ghEnvironment()
         let pipe = Pipe()
         process.standardOutput = pipe
         do {
             try process.run()
             process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                return GitHubPRInfo(number: number, title: "#\(number)", url: url, state: "OPEN", unresolvedCommentCount: 0)
-            }
+            guard process.terminationStatus == 0 else { return fallback }
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return GitHubPRInfo(number: number, title: "#\(number)", url: url, state: "OPEN", unresolvedCommentCount: 0)
-            }
+            guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return fallback }
+
             let title = dict["title"] as? String ?? "#\(number)"
             let state = dict["state"] as? String ?? "OPEN"
+            let isDraft = dict["isDraft"] as? Bool ?? false
+            let reviewDecision = dict["reviewDecision"] as? String ?? ""
+            let assignees = dict["assignees"] as? [[String: Any]] ?? []
             let authorLogin = (dict["author"] as? [String: Any])?["login"] as? String ?? ""
 
-            // Count unresolved comments not by the PR author.
-            var unresolvedCount = 0
-            if let comments = dict["comments"] as? [[String: Any]] {
-                for comment in comments {
-                    let login = (comment["author"] as? [String: Any])?["login"] as? String ?? ""
-                    if login != authorLogin {
-                        unresolvedCount += 1
-                    }
-                }
-            }
-            if let reviews = dict["reviews"] as? [[String: Any]] {
-                for review in reviews {
-                    let login = (review["author"] as? [String: Any])?["login"] as? String ?? ""
-                    if login != authorLogin, let body = review["body"] as? String, !body.isEmpty {
-                        unresolvedCount += 1
-                    }
-                }
-            }
+            // Unresolved review thread count via GraphQL.
+            let unresolvedCount = fetchUnresolvedThreadCount(
+                ghPath: ghPath, repo: repo, number: number, excludeAuthor: authorLogin
+            )
 
-            return GitHubPRInfo(number: number, title: title, url: url, state: state, unresolvedCommentCount: unresolvedCount)
+            return GitHubPRInfo(
+                number: number, title: title, url: url, state: state,
+                isDraft: isDraft, reviewDecision: reviewDecision,
+                hasAssignees: !assignees.isEmpty, unresolvedCommentCount: unresolvedCount
+            )
         } catch {
-            return GitHubPRInfo(number: number, title: "#\(number)", url: url, state: "OPEN", unresolvedCommentCount: 0)
+            return fallback
+        }
+    }
+
+    /// Uses the GitHub GraphQL API to count unresolved review threads,
+    /// excluding threads started by the PR author.
+    private func fetchUnresolvedThreadCount(ghPath: String, repo: String, number: Int, excludeAuthor: String) -> Int {
+        let parts = repo.split(separator: "/")
+        guard parts.count == 2 else { return 0 }
+        let owner = parts[0]
+        let name = parts[1]
+
+        let query = """
+        query {
+          repository(owner: "\(owner)", name: "\(name)") {
+            pullRequest(number: \(number)) {
+              reviewThreads(first: 100) {
+                nodes {
+                  isResolved
+                  comments(first: 1) {
+                    nodes { author { login } }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ghPath)
+        process.arguments = ["api", "graphql", "-f", "query=\(query)"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.environment = Self.ghEnvironment()
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return 0 }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let dataDict = root["data"] as? [String: Any],
+                  let repoDict = dataDict["repository"] as? [String: Any],
+                  let prDict = repoDict["pullRequest"] as? [String: Any],
+                  let threads = prDict["reviewThreads"] as? [String: Any],
+                  let nodes = threads["nodes"] as? [[String: Any]]
+            else { return 0 }
+
+            var count = 0
+            for node in nodes {
+                guard node["isResolved"] as? Bool == false else { continue }
+                // Exclude threads started by the PR author.
+                if let comments = node["comments"] as? [String: Any],
+                   let commentNodes = comments["nodes"] as? [[String: Any]],
+                   let first = commentNodes.first,
+                   let author = first["author"] as? [String: Any],
+                   let login = author["login"] as? String,
+                   login == excludeAuthor {
+                    continue
+                }
+                count += 1
+            }
+            return count
+        } catch {
+            return 0
         }
     }
 
