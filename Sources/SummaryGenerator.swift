@@ -75,10 +75,12 @@ final class SummaryGenerator {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: claudePath)
-        process.arguments = ["-p", prompt, "--output-format", "text"]
+        process.arguments = ["-p", prompt]
         process.standardInput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        process.environment = ["PATH": ClaudeCLI.augmentedPATH]
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = ClaudeCLI.augmentedPATH
+        process.environment = env
         let pipe = Pipe()
         process.standardOutput = pipe
 

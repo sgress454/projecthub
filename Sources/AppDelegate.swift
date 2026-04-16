@@ -290,7 +290,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Summary
         sub.addItem(.separator())
         let summaryText = project.summary
-            ?? "No summary yet \u{2014} attach GitHub issues or start an OpenSpec plan!"
+            ?? "No summary yet."
         let summaryItem = NSMenuItem()
         summaryItem.view = SummaryMenuItemView(text: summaryText)
         summaryItem.isEnabled = false
