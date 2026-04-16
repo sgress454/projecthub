@@ -16,7 +16,31 @@ cd "$(dirname "$0")"
 # A persistent self-signed cert in the login keychain gives every rebuild
 # the same designated requirement, so the grant sticks.
 ensure_signing_identity() {
-    if security find-identity -v -p codesigning | grep -q "$SIGN_IDENTITY"; then
+    # Count certificates with our common name. We use find-certificate rather
+    # than find-identity because a cert can exist without the codesigning
+    # policy predicate matching — if we miss it here, the create branch below
+    # silently produces a duplicate, and codesign later bails with
+    # "ambiguous (matches ... and ...)".
+    local cert_count
+    cert_count=$(security find-certificate -a -c "$SIGN_IDENTITY" -Z "$LOGIN_KEYCHAIN" 2>/dev/null \
+        | grep -c "^SHA-1 hash:" || true)
+
+    if [ "$cert_count" -gt 1 ]; then
+        cat >&2 <<EOF
+ERROR: found $cert_count '$SIGN_IDENTITY' certificates in the login keychain.
+codesign needs exactly one. Clean them up with either:
+
+  GUI:  Keychain Access → login → search "ProjectHub" → select all → ⌘-Delete
+  CLI:  while security find-certificate -c "$SIGN_IDENTITY" "$LOGIN_KEYCHAIN" >/dev/null 2>&1; do
+            security delete-certificate -c "$SIGN_IDENTITY" "$LOGIN_KEYCHAIN" || break
+        done
+
+Then re-run this installer.
+EOF
+        exit 1
+    fi
+
+    if [ "$cert_count" -eq 1 ]; then
         return 0
     fi
 

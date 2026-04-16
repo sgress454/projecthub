@@ -4,7 +4,7 @@
 - [x] 1.2 Create the `Sources/` directory.
 - [x] 1.3 Add `.gitignore` for `.build/`, `.swiftpm/`, `DerivedData/`, `*.xcodeproj`, `.DS_Store`, `Package.resolved`.
 - [x] 1.4 (Deferred — no bundle; SPM executable runs under a LaunchAgent.)
-- [ ] 1.5 Commit the scaffold.
+- [x] 1.5 Commit the scaffold.
 
 ## 2. Project model and storage
 
@@ -55,8 +55,8 @@
 
 - [x] 8.1 Configure app signing (ad-hoc / developer ID, matching Claude Usage Bar approach). *(Ad-hoc signing is applied automatically by `swift build`, same as the reference app.)*
 - [x] 8.2 Build a release binary via `swift build -c release` and install script that places it at `~/.local/bin/projecthub` with a LaunchAgent. *(Replaces `.app`-into-`/Applications` — matches Claude Usage Bar's approach.)*
-- [ ] 8.3 Verify Accessibility prompt appears and switching works after grant. **[User verification required]**
-- [ ] 8.4 Manual smoke test: 3 Spaces, 3 projects, click each → correct Space activates; active highlight follows. **[User verification required]**
+- [x] 8.3 Verify Accessibility prompt appears and switching works after grant. **[User verification required]**
+- [x] 8.4 Manual smoke test: 3 Spaces, 3 projects, click each → correct Space activates; active highlight follows. **[User verification required]**
 
 ## 9. Documentation
 
@@ -66,4 +66,4 @@
 ## 10. Archive the change
 
 - [x] 10.1 Verify all v0.1 requirements pass `openspec validate`.
-- [ ] 10.2 Archive `add-projecthub-alpha` so its spec deltas fold into `openspec/specs/projecthub/spec.md`. **[Do after 8.3 + 8.4 pass]**
+- [x] 10.2 Archive `add-projecthub-alpha` so its spec deltas fold into `openspec/specs/projecthub/spec.md`. **[Do after 8.3 + 8.4 pass]**

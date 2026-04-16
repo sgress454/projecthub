@@ -44,6 +44,8 @@ struct OnboardingView: View {
                 }
             )
 
+            claudeStatusNote
+
             Spacer(minLength: 0)
 
             HStack {
@@ -53,7 +55,22 @@ struct OnboardingView: View {
             }
         }
         .padding(22)
-        .frame(width: 520, height: 460)
+        .frame(width: 520, height: 560)
+    }
+
+    private var claudeStatusNote: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            Text("Optional: Claude status")
+                .font(.headline)
+            Text(
+                "Want to know when Claude is waiting on you in another Space? Open Edit Projects, set a folder per project, and flip on Claude status. Each project shows 🟢 / 🟡 / 🔴 in the menu; a badge on the menu bar icon counts projects that need attention. Requires the `claude` CLI on your PATH."
+            )
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
     }
 
     @ViewBuilder

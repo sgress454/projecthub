@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import ProjectHubKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -29,6 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Rebuild the menu + badge whenever any project's runtime state
+        // changes (new event ingested, classifier resolved, etc.).
+        ProjectStateStore.shared.$states
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.updateStatusButton()
+                self?.rebuildMenu()
+            }
+            .store(in: &cancellables)
+
         // macOS pushes an event whenever the active Space changes — from us,
         // from Ctrl+N, from Mission Control, from trackpad swipes. Use it to
         // keep the highlight current without polling.
@@ -39,11 +50,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             guard let self else { return }
             self.refreshActiveSpace()
+            if let n = self.activeSpaceNumber {
+                StatusCoordinator.shared.activeSpaceBecame(n)
+            }
             self.updateStatusButton()
             self.rebuildMenu()
         }
 
+        // Start the Claude status pipeline. This replays events.jsonl, wires
+        // the watcher, and begins reacting to claudeEnabled flips.
+        StatusCoordinator.shared.start()
+        EventLog.rotateIfNeeded()
+
         refreshActiveSpace()
+        if let n = activeSpaceNumber {
+            StatusCoordinator.shared.activeSpaceBecame(n)
+        }
         updateStatusButton()
         rebuildMenu()
 
@@ -75,9 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusButton() {
         guard let button = statusItem.button else { return }
 
-        // Always keep the icon visible so the menu bar entry has context.
-        if let image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: "ProjectHub") {
-            image.isTemplate = true
+        if let image = MenuBarIcon.baseImage() {
             button.image = image
             button.imagePosition = .imageLeft
         }
@@ -87,6 +107,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             button.title = ""
         }
+
+        // Overlay the badge showing projects needing attention.
+        let stateStore = ProjectStateStore.shared
+        MenuBarIcon.applyBadge(
+            to: button,
+            count: stateStore.badgeCount,
+            urgent: stateStore.hasAnyRed
+        )
+
+        // Pulse the icon while any project is actively working.
+        MenuBarIcon.setWorkingAnimation(
+            on: button,
+            animating: stateStore.hasAnyWorking
+        )
     }
 
     // MARK: - Menu
@@ -108,34 +142,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
             empty.target = self
         } else {
-            // Use tab stops so the "Space N" column lines up regardless of how
-            // wide each project name renders in the menu font.
-            let menuFont = NSFont.menuFont(ofSize: 0)
-            let fontAttrs: [NSAttributedString.Key: Any] = [.font: menuFont]
-            let maxNameWidth = projects
-                .map { ($0.name as NSString).size(withAttributes: fontAttrs).width }
-                .max() ?? 0
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.tabStops = [
-                NSTextTab(textAlignment: .left, location: 18),
-                NSTextTab(textAlignment: .left, location: 18 + maxNameWidth + 28),
-            ]
-            let titleAttrs: [NSAttributedString.Key: Any] = [
-                .font: menuFont,
-                .paragraphStyle: paragraph,
-            ]
-
+            let stateStore = ProjectStateStore.shared
             for project in projects.sorted(by: { $0.space < $1.space }) {
-                let marker = (project.space == activeSpaceNumber) ? "●" : " "
-                let titleString = "\(marker)\t\(project.name)\tSpace \(project.space)"
-                let item = menu.addItem(
-                    withTitle: "",
-                    action: #selector(projectClicked(_:)),
-                    keyEquivalent: ""
-                )
+                let item = NSMenuItem()
+                item.action = #selector(projectClicked(_:))
                 item.target = self
                 item.representedObject = project.id
-                item.attributedTitle = NSAttributedString(string: titleString, attributes: titleAttrs)
+
+                let rowView = ProjectRowView()
+                // Disabled projects (claudeEnabled=false or path unset) surface
+                // as green in the UI regardless of any ingested events.
+                let effectiveState = project.claudeEnabled
+                    ? stateStore.state(for: project.id)
+                    : .idle
+                rowView.configure(
+                    projectId: project.id,
+                    name: project.name,
+                    space: project.space,
+                    state: effectiveState,
+                    isActive: project.space == activeSpaceNumber
+                )
+                item.view = rowView
+                menu.addItem(item)
             }
         }
 
@@ -187,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // highlight is correct next time the menu opens, without waiting for
         // the detector poll to pick up the switch.
         activeSpaceNumber = project.space
+        StatusCoordinator.shared.activeSpaceBecame(project.space)
         updateStatusButton()
         rebuildMenu()
     }
@@ -203,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let host = NSHostingController(rootView: view)
             let window = NSWindow(contentViewController: host)
             window.title = "ProjectHub — Projects"
-            window.setContentSize(NSSize(width: 440, height: 380))
+            window.setContentSize(NSSize(width: 520, height: 420))
             window.styleMask = [.titled, .closable, .resizable]
             window.isReleasedWhenClosed = false
             // Follow the user when they switch Spaces, rather than pulling them
@@ -238,6 +267,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitClicked() {
         NSApp.terminate(nil)
+    }
+
+    /// Safety net for graceful shutdowns — launchd SIGTERM or the user
+    /// picking Quit. `killall` during `install.sh` is SIGKILL and bypasses
+    /// this, which is why callers that know they're about to die should
+    /// also call `flushPendingSave()` explicitly.
+    func applicationWillTerminate(_: Notification) {
+        ProjectStore.shared.flushPendingSave()
     }
 
     // MARK: - Accessibility prompt
