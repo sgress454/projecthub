@@ -189,6 +189,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         edit.target = self
 
+        if !projects.isEmpty {
+            let refresh = menu.addItem(
+                withTitle: "Refresh Now",
+                action: #selector(refreshNow),
+                keyEquivalent: "r"
+            )
+            refresh.target = self
+        }
+
         let showName = menu.addItem(
             withTitle: "Show Active Project Name in Menu Bar",
             action: #selector(toggleShowNameInMenuBar),
@@ -219,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         var allURLs: [URL] = []
 
         // Issues
+        let issueInfoCache = GitHubSync.shared.issueInfoCache
         if !project.githubIssues.isEmpty {
             let header = NSMenuItem()
             header.attributedTitle = NSAttributedString(
@@ -229,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sub.addItem(header)
 
             for url in project.githubIssues {
-                let label = Self.issueLabel(url)
+                let label = Self.issueLabel(url, info: issueInfoCache[url])
                 let item = NSMenuItem(title: label, action: #selector(openURL(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = url
@@ -310,13 +320,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return sub
     }
 
-    private static func issueLabel(_ url: URL) -> String {
+    private static let maxIssueTitleChars = 50
+
+    private static func issueLabel(_ url: URL, info: GitHubIssueInfo?) -> String {
         let components = url.pathComponents
+        let number: String
         if let idx = components.firstIndex(of: "issues"),
            idx + 1 < components.count {
-            return "#\(components[idx + 1])"
+            number = "#\(components[idx + 1])"
+        } else {
+            number = url.lastPathComponent
         }
-        return url.lastPathComponent
+        guard let info else { return number }
+        let title = info.title.count > maxIssueTitleChars
+            ? "\(info.title.prefix(maxIssueTitleChars - 1))\u{2026}"
+            : info.title
+        return "\(number) \u{2014} \(title)"
     }
 
     private static func prLabel(_ url: URL, info: GitHubPRInfo?) -> String {
@@ -370,6 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         StatusCoordinator.shared.activeSpaceBecame(project.space)
         updateStatusButton()
         rebuildMenu()
+    }
+
+    @objc private func refreshNow() {
+        GitHubSync.shared.triggerSync()
+        SummaryGenerator.shared.regenerateAll()
     }
 
     @objc private func toggleShowNameInMenuBar() {

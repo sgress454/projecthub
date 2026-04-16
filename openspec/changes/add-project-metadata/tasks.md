@@ -56,6 +56,6 @@
 
 - [x] 7.1 `swift build` — compiles cleanly.
 - [x] 7.2 `swift test` — all existing and new tests pass.
-- [ ] 7.3 Smoke test: add metadata to a project, verify submenu shows issues/PRs/links/summary. Click links to confirm browser opens.
-- [ ] 7.4 Smoke test: verify click-to-switch still works on rows with submenus.
-- [ ] 7.5 Smoke test: verify graceful degradation with `gh` and `claude` absent from PATH.
+- [x] 7.3 Smoke test: add metadata to a project, verify submenu shows issues/PRs/links/summary. Click links to confirm browser opens.
+- [x] 7.4 Smoke test: verify click-to-switch still works on rows with submenus.
+- [x] 7.5 Smoke test: verify graceful degradation with `gh` and `claude` absent from PATH.

@@ -9,6 +9,9 @@ final class GitHubSync {
     /// In-memory cache of PR metadata keyed by PR URL.
     private(set) var prInfoCache: [URL: GitHubPRInfo] = [:]
 
+    /// In-memory cache of issue metadata keyed by issue URL.
+    private(set) var issueInfoCache: [URL: GitHubIssueInfo] = [:]
+
     private var timer: Timer?
     private let queue = DispatchQueue(label: "GitHubSync", qos: .utility)
 
@@ -50,15 +53,25 @@ final class GitHubSync {
         }
     }
 
-    /// Returns true if any project's PR data changed.
+    /// Returns true if any project's data changed.
     private func runSync() -> Bool {
         guard GitHubCLI.resolve() != nil else { return false }
 
         let projects = DispatchQueue.main.sync { ProjectStore.shared.projects }
-        var newCache: [URL: GitHubPRInfo] = [:]
+        var newPRCache: [URL: GitHubPRInfo] = [:]
+        var newIssueCache: [URL: GitHubIssueInfo] = [:]
         var anyProjectChanged = false
 
         for project in projects {
+            // Fetch issue info for all linked issues (doesn't require git/branch).
+            for issueURL in project.githubIssues where newIssueCache[issueURL] == nil {
+                if let issueNumber = Self.extractIssueNumber(from: issueURL),
+                   let issueRepo = Self.extractRepo(from: issueURL) {
+                    let info = fetchIssueInfo(repo: issueRepo, number: issueNumber, url: issueURL)
+                    newIssueCache[issueURL] = info
+                }
+            }
+
             guard let path = project.path else { continue }
             guard let branch = gitCurrentBranch(at: path) else { continue }
             guard let remote = gitRemoteURL(at: path) else { continue }
@@ -67,7 +80,7 @@ final class GitHubSync {
             let discovered = discoverPRs(repo: repo, branch: branch)
             for pr in discovered {
                 let info = fetchPRInfo(repo: repo, number: pr.number, url: pr.url)
-                newCache[pr.url] = info
+                newPRCache[pr.url] = info
             }
 
             // Merge auto-discovered with existing manual PRs.
@@ -90,17 +103,20 @@ final class GitHubSync {
             }
 
             // Also cache info for manually-added PRs.
-            for entry in merged where entry.source == .manual && newCache[entry.url] == nil {
+            for entry in merged where entry.source == .manual && newPRCache[entry.url] == nil {
                 if let prNumber = Self.extractPRNumber(from: entry.url),
                    let prRepo = Self.extractRepo(from: entry.url) {
                     let info = fetchPRInfo(repo: prRepo, number: prNumber, url: entry.url)
-                    newCache[entry.url] = info
+                    newPRCache[entry.url] = info
                 }
             }
         }
 
-        let changed = anyProjectChanged || newCache.keys != prInfoCache.keys
-        prInfoCache = newCache
+        let changed = anyProjectChanged
+            || newPRCache.keys != prInfoCache.keys
+            || newIssueCache.keys != issueInfoCache.keys
+        prInfoCache = newPRCache
+        issueInfoCache = newIssueCache
         return changed
     }
 
@@ -322,12 +338,51 @@ final class GitHubSync {
         return Int(components[idx + 1])
     }
 
+    static func extractIssueNumber(from url: URL) -> Int? {
+        let components = url.pathComponents
+        guard let idx = components.firstIndex(of: "issues"),
+              idx + 1 < components.count
+        else { return nil }
+        return Int(components[idx + 1])
+    }
+
     static func extractRepo(from url: URL) -> String? {
-        // https://github.com/org/repo/pull/N  →  org/repo
+        // https://github.com/org/repo/pull/N  or  /issues/N  →  org/repo
         let components = url.pathComponents
         guard components.count >= 4,
               let host = url.host, host.contains("github.com")
         else { return nil }
         return "\(components[1])/\(components[2])"
+    }
+
+    // MARK: - Issue fetching
+
+    private func fetchIssueInfo(repo: String, number: Int, url: URL) -> GitHubIssueInfo {
+        let fallback = GitHubIssueInfo(number: number, title: "#\(number)", url: url, state: "OPEN")
+        guard let ghPath = GitHubCLI.resolve() else { return fallback }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ghPath)
+        process.arguments = [
+            "issue", "view", "\(number)",
+            "--repo", repo,
+            "--json", "number,title,url,state",
+        ]
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        process.environment = Self.ghEnvironment()
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return fallback }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return fallback }
+            let title = dict["title"] as? String ?? "#\(number)"
+            let state = dict["state"] as? String ?? "OPEN"
+            return GitHubIssueInfo(number: number, title: title, url: url, state: state)
+        } catch {
+            return fallback
+        }
     }
 }
