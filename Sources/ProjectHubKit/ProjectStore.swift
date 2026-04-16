@@ -42,7 +42,7 @@ public final class ProjectStore: ObservableObject {
     /// Current on-disk schema version written by this binary.
     /// v1 files (name + space only) still load correctly — the extra fields
     /// simply take their defaults.
-    internal static let currentSchemaVersion = 2
+    internal static let currentSchemaVersion = 3
 
     private let fileURL: URL
     private var extraTopLevelFields: [String: Any] = [:]
@@ -95,9 +95,14 @@ public final class ProjectStore: ObservableObject {
     }
 
     /// Sets (or clears, with nil) the filesystem path for a project.
+    /// Also runs OpenSpec auto-detection if no change is manually set.
     public func setPath(id: UUID, path: String?) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].path = path
+        // Auto-detect OpenSpec change when path changes, unless manually set.
+        if let path, projects[idx].openspecChange == nil {
+            projects[idx].openspecChange = OpenSpecDetector.detectChange(at: path)
+        }
         scheduleSave()
     }
 
@@ -111,6 +116,38 @@ public final class ProjectStore: ObservableObject {
     /// Updates the global "hook installed" flag.
     public func setClaudeHookInstalled(_ installed: Bool) {
         settings.claudeHookInstalled = installed
+        scheduleSave()
+    }
+
+    // MARK: - Metadata API (v3)
+
+    public func setGithubIssues(id: UUID, issues: [URL]) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].githubIssues = issues
+        scheduleSave()
+    }
+
+    public func setGithubPRs(id: UUID, prs: [GitHubPREntry]) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].githubPRs = prs
+        scheduleSave()
+    }
+
+    public func setLinks(id: UUID, links: [LabeledLink]) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].links = links
+        scheduleSave()
+    }
+
+    public func setOpenspecChange(id: UUID, change: String?) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].openspecChange = change
+        scheduleSave()
+    }
+
+    public func setSummary(id: UUID, summary: String?) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].summary = summary
         scheduleSave()
     }
 
@@ -150,6 +187,13 @@ public final class ProjectStore: ObservableObject {
         extras.removeValue(forKey: "settings")
         extras.removeValue(forKey: "version")
         self.extraTopLevelFields = extras
+
+        // Auto-detect OpenSpec changes for projects that have paths but no manual setting.
+        for i in projects.indices {
+            if let path = projects[i].path, projects[i].openspecChange == nil {
+                projects[i].openspecChange = OpenSpecDetector.detectChange(at: path)
+            }
+        }
     }
 
     private func scheduleSave() {

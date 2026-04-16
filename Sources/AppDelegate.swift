@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_: Notification) {
+        installEditMenu()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         updateStatusButton()
 
@@ -61,6 +62,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the watcher, and begins reacting to claudeEnabled flips.
         StatusCoordinator.shared.start()
         EventLog.rotateIfNeeded()
+
+        // Start GitHub sync and summary generation.
+        GitHubSync.shared.onSyncComplete = { [weak self] changed in
+            self?.updateStatusButton()
+            self?.rebuildMenu()
+            if changed {
+                SummaryGenerator.shared.regenerateAll()
+            }
+        }
+        GitHubSync.shared.start()
+        SummaryGenerator.shared.start()
 
         refreshActiveSpace()
         if let n = activeSpaceNumber {
@@ -163,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     isActive: project.space == activeSpaceNumber
                 )
                 item.view = rowView
+                item.submenu = buildSubmenu(for: project)
                 menu.addItem(item)
             }
         }
@@ -197,6 +210,139 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quit.target = self
 
         statusItem.menu = menu
+    }
+
+    // MARK: - Project submenu
+
+    private func buildSubmenu(for project: Project) -> NSMenu {
+        let sub = NSMenu()
+        var allURLs: [URL] = []
+
+        // Issues
+        if !project.githubIssues.isEmpty {
+            let header = NSMenuItem()
+            header.attributedTitle = NSAttributedString(
+                string: "Issues",
+                attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize)]
+            )
+            header.isEnabled = false
+            sub.addItem(header)
+
+            for url in project.githubIssues {
+                let label = Self.issueLabel(url)
+                let item = NSMenuItem(title: label, action: #selector(openURL(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = url
+                sub.addItem(item)
+                allURLs.append(url)
+            }
+        }
+
+        // PRs
+        let prInfoCache = GitHubSync.shared.prInfoCache
+        if !project.githubPRs.isEmpty {
+            let header = NSMenuItem()
+            header.attributedTitle = NSAttributedString(
+                string: "Pull Requests",
+                attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize)]
+            )
+            header.isEnabled = false
+            sub.addItem(header)
+
+            for entry in project.githubPRs {
+                let label = Self.prLabel(entry.url, info: prInfoCache[entry.url])
+                let item = NSMenuItem(title: label, action: #selector(openURL(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry.url
+                sub.addItem(item)
+                allURLs.append(entry.url)
+            }
+        }
+
+        // Links
+        if !project.links.isEmpty {
+            let header = NSMenuItem()
+            header.attributedTitle = NSAttributedString(
+                string: "Links",
+                attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize)]
+            )
+            header.isEnabled = false
+            sub.addItem(header)
+
+            for link in project.links {
+                let item = NSMenuItem(title: link.label, action: #selector(openURL(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = link.url
+                sub.addItem(item)
+                allURLs.append(link.url)
+            }
+        }
+
+        // Open All in Browser
+        if allURLs.count >= 2 {
+            sub.addItem(.separator())
+            let openAll = NSMenuItem(title: "Open All in Browser", action: #selector(openAllURLs(_:)), keyEquivalent: "")
+            openAll.target = self
+            openAll.representedObject = allURLs
+            sub.addItem(openAll)
+        }
+
+        // Summary
+        sub.addItem(.separator())
+        let summaryText = project.summary
+            ?? "No summary yet \u{2014} attach GitHub issues or start an OpenSpec plan!"
+        let summaryItem = NSMenuItem()
+        summaryItem.view = SummaryMenuItemView(text: summaryText)
+        summaryItem.isEnabled = false
+        sub.addItem(summaryItem)
+
+        return sub
+    }
+
+    private static func issueLabel(_ url: URL) -> String {
+        let components = url.pathComponents
+        if let idx = components.firstIndex(of: "issues"),
+           idx + 1 < components.count {
+            return "#\(components[idx + 1])"
+        }
+        return url.lastPathComponent
+    }
+
+    private static func prLabel(_ url: URL, info: GitHubPRInfo?) -> String {
+        let components = url.pathComponents
+        let number: String
+        if let idx = components.firstIndex(of: "pull"),
+           idx + 1 < components.count {
+            number = "#\(components[idx + 1])"
+        } else {
+            number = url.lastPathComponent
+        }
+        guard let info else { return number }
+        var label = "\(number) \u{2014} \(info.title)"
+        let stateTag: String
+        switch info.state {
+        case "OPEN": stateTag = ""
+        case "MERGED": stateTag = " (merged)"
+        case "CLOSED": stateTag = " (closed)"
+        default: stateTag = " (\(info.state.lowercased()))"
+        }
+        label += stateTag
+        if info.unresolvedCommentCount > 0 {
+            label += "  [\(info.unresolvedCommentCount) comment\(info.unresolvedCommentCount == 1 ? "" : "s")]"
+        }
+        return label
+    }
+
+    @objc private func openURL(_ sender: NSMenuItem) {
+        guard let url = sender.representedObject as? URL else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func openAllURLs(_ sender: NSMenuItem) {
+        guard let urls = sender.representedObject as? [URL], !urls.isEmpty else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.open(urls, withApplicationAt: NSWorkspace.shared.urlForApplication(toOpen: urls[0]) ?? URL(fileURLWithPath: "/Applications/Safari.app"), configuration: config)
     }
 
     // MARK: - Actions
@@ -275,6 +421,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// also call `flushPendingSave()` explicitly.
     func applicationWillTerminate(_: Notification) {
         ProjectStore.shared.flushPendingSave()
+    }
+
+    // MARK: - Edit menu (enables Cmd+C/V/X/A in text fields)
+
+    /// Menu bar-only apps have no main menu by default, so standard keyboard
+    /// shortcuts for Cut/Copy/Paste/Select All are dead. Installing a minimal
+    /// Edit menu restores them for all SwiftUI and AppKit text fields.
+    private func installEditMenu() {
+        let mainMenu = NSMenu()
+        let editMenuItem = NSMenuItem()
+        editMenuItem.submenu = {
+            let m = NSMenu(title: "Edit")
+            m.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+            m.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+            m.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+            m.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+            return m
+        }()
+        mainMenu.addItem(editMenuItem)
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Accessibility prompt

@@ -17,9 +17,9 @@ final class StorageTests: XCTestCase {
 
     private func fileURL() -> URL { tempDir.appendingPathComponent("projects.json") }
 
-    // MARK: - 1.4: v0.1 file loads, re-saves as v2, defaults populated
+    // MARK: - v0.1 file loads, re-saves with defaults populated
 
-    func testLoadsV1FileAndReSavesAsV2WithDefaults() throws {
+    func testLoadsV1FileAndReSavesWithDefaults() throws {
         // Seed a v0.1-shaped projects.json on disk.
         let v1Payload: [String: Any] = [
             "version": 1,
@@ -38,6 +38,12 @@ final class StorageTests: XCTestCase {
         XCTAssertNil(store.projects[0].path)
         XCTAssertFalse(store.projects[0].claudeEnabled)
         XCTAssertFalse(store.settings.claudeHookInstalled)
+        // Metadata fields default to empty/nil on v1 files.
+        XCTAssertTrue(store.projects[0].githubIssues.isEmpty)
+        XCTAssertTrue(store.projects[0].githubPRs.isEmpty)
+        XCTAssertTrue(store.projects[0].links.isEmpty)
+        XCTAssertNil(store.projects[0].openspecChange)
+        XCTAssertNil(store.projects[0].summary)
 
         store.setPath(id: store.projects[0].id, path: "/tmp/alpha")
         store.flushPendingSave()
@@ -45,7 +51,7 @@ final class StorageTests: XCTestCase {
         // Re-read from disk and check version + new fields round-tripped.
         let rawData = try Data(contentsOf: fileURL())
         let raw = try JSONSerialization.jsonObject(with: rawData) as! [String: Any]
-        XCTAssertEqual(raw["version"] as? Int, 2)
+        XCTAssertEqual(raw["version"] as? Int, 3)
 
         let persisted = raw["projects"] as! [[String: Any]]
         XCTAssertEqual(persisted.count, 2)
@@ -104,6 +110,95 @@ final class StorageTests: XCTestCase {
         XCTAssertEqual(reloaded.projects.first?.path, "/Users/scott/Development/proj")
         XCTAssertEqual(reloaded.projects.first?.claudeEnabled, true)
         XCTAssertEqual(reloaded.settings.claudeHookInstalled, true)
+    }
+
+    // MARK: - v2 file loads with metadata defaults
+
+    func testLoadsV2FileWithMetadataDefaults() throws {
+        let v2Payload: [String: Any] = [
+            "version": 2,
+            "projects": [
+                [
+                    "id": UUID().uuidString,
+                    "name": "gamma",
+                    "space": 3,
+                    "path": "/tmp/gamma",
+                    "claude_enabled": true,
+                ],
+            ],
+            "settings": ["claude_hook_installed": true],
+        ]
+        let data = try JSONSerialization.data(withJSONObject: v2Payload, options: [])
+        try data.write(to: fileURL())
+
+        let store = ProjectStore(fileURL: fileURL())
+        XCTAssertEqual(store.projects.count, 1)
+        let project = store.projects[0]
+        XCTAssertEqual(project.name, "gamma")
+        XCTAssertEqual(project.path, "/tmp/gamma")
+        XCTAssertTrue(project.claudeEnabled)
+        // v2 files have no metadata — fields default to empty/nil.
+        XCTAssertTrue(project.githubIssues.isEmpty)
+        XCTAssertTrue(project.githubPRs.isEmpty)
+        XCTAssertTrue(project.links.isEmpty)
+        XCTAssertNil(project.openspecChange)
+        XCTAssertNil(project.summary)
+    }
+
+    // MARK: - v3 metadata round-trips
+
+    func testMetadataFieldsRoundTrip() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "proj", space: 1)
+        let id = store.projects[0].id
+
+        let issueURL = URL(string: "https://github.com/org/repo/issues/42")!
+        let prURL = URL(string: "https://github.com/org/repo/pull/51")!
+        let figmaURL = URL(string: "https://figma.com/design/abc123")!
+
+        store.setGithubIssues(id: id, issues: [issueURL])
+        store.setGithubPRs(id: id, prs: [
+            GitHubPREntry(url: prURL, source: .auto),
+        ])
+        store.setLinks(id: id, links: [
+            LabeledLink(url: figmaURL, label: "Design mockups"),
+        ])
+        store.setOpenspecChange(id: id, change: "add-dark-mode")
+        store.setSummary(id: id, summary: "Working on dark mode. 3 of 5 tasks done.")
+        store.flushPendingSave()
+
+        // Reload from disk.
+        let reloaded = ProjectStore(fileURL: fileURL())
+        let project = reloaded.projects[0]
+        XCTAssertEqual(project.githubIssues, [issueURL])
+        XCTAssertEqual(project.githubPRs.count, 1)
+        XCTAssertEqual(project.githubPRs[0].url, prURL)
+        XCTAssertEqual(project.githubPRs[0].source, .auto)
+        XCTAssertEqual(project.links.count, 1)
+        XCTAssertEqual(project.links[0].url, figmaURL)
+        XCTAssertEqual(project.links[0].label, "Design mockups")
+        XCTAssertEqual(project.openspecChange, "add-dark-mode")
+        XCTAssertEqual(project.summary, "Working on dark mode. 3 of 5 tasks done.")
+
+        // Verify on-disk version.
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        XCTAssertEqual(raw["version"] as? Int, 3)
+    }
+
+    // MARK: - Empty metadata fields omitted from JSON
+
+    func testEmptyMetadataOmittedFromJSON() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "proj", space: 1)
+        store.flushPendingSave()
+
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        let persisted = (raw["projects"] as! [[String: Any]])[0]
+        XCTAssertNil(persisted["github_issues"])
+        XCTAssertNil(persisted["github_prs"])
+        XCTAssertNil(persisted["links"])
+        XCTAssertNil(persisted["openspec_change"])
+        XCTAssertNil(persisted["summary"])
     }
 
     func testClearingPathRemovesFieldFromJSON() throws {

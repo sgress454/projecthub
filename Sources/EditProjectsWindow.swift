@@ -252,6 +252,7 @@ struct EditProjectsView: View {
 private struct ProjectRow: View {
     let project: Project
     @ObservedObject private var store = ProjectStore.shared
+    @State private var showMetadata = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -274,6 +275,14 @@ private struct ProjectRow: View {
             .frame(width: 110)
 
             PathPickerControl(project: project)
+
+            Button {
+                showMetadata = true
+            } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Edit project metadata (issues, PRs, links)")
 
             Toggle(
                 "",
@@ -299,6 +308,9 @@ private struct ProjectRow: View {
             }
             .buttonStyle(.borderless)
             .help("Remove project")
+        }
+        .sheet(isPresented: $showMetadata) {
+            MetadataEditView(projectId: project.id)
         }
     }
 }

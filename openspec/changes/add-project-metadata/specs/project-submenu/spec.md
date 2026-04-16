@@ -65,6 +65,27 @@ The submenu SHALL display a section for other links when the project has one or 
 - **WHEN** the user clicks a link item in the submenu
 - **THEN** the link URL opens in the default browser
 
+### Requirement: Open all links in browser
+
+The submenu SHALL include an "Open All in Browser" item when the project has two or more total URLs (issues, PRs, and other links combined). Clicking it SHALL open all URLs as tabs in a single browser window.
+
+#### Scenario: Open all links as browser tabs
+
+- **GIVEN** a project has 3 linked URLs (1 issue, 1 PR, 1 Figma link)
+- **WHEN** the user clicks "Open All in Browser" in the submenu
+- **THEN** all 3 URLs open as tabs in the default browser using the array variant of `NSWorkspace.shared.open(_:withApplicationAt:configuration:)`
+
+#### Scenario: Hidden when fewer than two links
+
+- **GIVEN** a project has zero or one total URLs across issues, PRs, and links
+- **WHEN** the submenu is open
+- **THEN** the "Open All in Browser" item is not shown
+
+#### Scenario: Separator placement
+
+- **WHEN** the "Open All in Browser" item is shown
+- **THEN** it appears below the link sections and above the AI summary, separated by dividers
+
 ### Requirement: Submenu displays AI summary
 
 The submenu SHALL display the project's cached AI summary at the bottom of the submenu. The summary is non-clickable.
