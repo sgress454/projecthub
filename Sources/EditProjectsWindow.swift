@@ -328,20 +328,20 @@ private struct PathPickerControl: View {
                     Image(systemName: "folder")
                     Text(displayLabel)
                         .lineLimit(1)
-                        .truncationMode(.head)
+                        .truncationMode(.middle)
                 }
-                .frame(minWidth: 100)
+                .frame(width: 120)
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
 
-            if project.path != nil {
-                Button(action: clearPath) {
-                    Image(systemName: "xmark.circle")
-                }
-                .buttonStyle(.borderless)
-                .help("Clear path")
+            Button(action: clearPath) {
+                Image(systemName: "xmark.circle")
             }
+            .buttonStyle(.borderless)
+            .help("Clear path")
+            .opacity(project.path != nil ? 1 : 0)
+            .disabled(project.path == nil)
         }
     }
 

@@ -28,6 +28,7 @@ final class ProjectRowView: NSView {
 
     init() {
         super.init(frame: NSRect(x: 0, y: 0, width: 280, height: 22))
+        autoresizingMask = [.width]
         wantsLayer = true
         buildSubviews()
     }

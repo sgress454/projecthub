@@ -287,12 +287,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sub.addItem(openAll)
         }
 
-        // Summary
+        // Summary — measure the menu width from existing items so the
+        // summary view can calculate its wrapped-text height correctly.
         sub.addItem(.separator())
         let summaryText = project.summary
-            ?? "No summary yet."
+            ?? "No summary yet \u{2014} attach GitHub issues or start an OpenSpec plan!"
+        let menuFont = NSFont.menuFont(ofSize: 0)
+        let menuItemPadding: CGFloat = 40 // left + right insets NSMenu uses
+        let widestTitle = sub.items.compactMap { item -> CGFloat? in
+            guard item.view == nil, !item.isSeparatorItem else { return nil }
+            let title = item.attributedTitle?.string ?? item.title
+            let size = (title as NSString).size(withAttributes: [.font: menuFont])
+            return size.width
+        }.max() ?? 0
+        let submenuWidth = max(widestTitle + menuItemPadding, 300)
+
         let summaryItem = NSMenuItem()
-        summaryItem.view = SummaryMenuItemView(text: summaryText)
+        summaryItem.view = SummaryMenuItemView(text: summaryText, width: submenuWidth)
         summaryItem.isEnabled = false
         sub.addItem(summaryItem)
 
