@@ -11,6 +11,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var editWindow: NSWindow?
     private var onboardingWindow: NSWindow?
+    private var preferencesWindow: NSWindow?
+
+    private var screenParamsObserver: NSObjectProtocol?
+    private var occlusionObserver: NSObjectProtocol?
+    private var pendingStatusButtonUpdate: DispatchWorkItem?
+    private var pendingVisibilityCheck: DispatchWorkItem?
+    private var availableTitleForms: [MenuBarTitleForm] = [.iconOnly]
+    private var currentFormIndex: Int = 0
 
     private static let showNameKey = "ProjectHub.showActiveProjectNameInMenuBar"
     private var showNameInMenuBar: Bool {
@@ -41,6 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
+        // Re-render the menu when preferences change so row enabled-states for
+        // the terminal control update after a terminal-choice switch.
+        PreferencesStore.shared.$preferences
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuildMenu() }
+            .store(in: &cancellables)
+
         // macOS pushes an event whenever the active Space changes — from us,
         // from Ctrl+N, from Mission Control, from trackpad swipes. Use it to
         // keep the highlight current without polling.
@@ -56,6 +71,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             self.updateStatusButton()
             self.rebuildMenu()
+        }
+
+        // Re-fit the menu-bar title whenever the menu bar's available width can
+        // change out from under us: screen attach/detach, resolution change,
+        // notch appearance/disappearance, or the system occluding the status
+        // item's hosting window.
+        screenParamsObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scheduleStatusButtonUpdate()
+        }
+
+        if let buttonWindow = statusItem.button?.window {
+            occlusionObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification,
+                object: buttonWindow,
+                queue: .main
+            ) { [weak self] _ in
+                // Observation, not reset: if the system just hid us (e.g. another
+                // app added a status item and crowded us out), shrink one step.
+                // Calling the full update here would re-expand to .full and loop
+                // against whatever clipped us in the first place.
+                self?.shrinkIfHidden()
+            }
         }
 
         // Start the Claude status pipeline. This replays events.jsonl, wires
@@ -95,15 +136,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ProjectStore.shared.projects.first { $0.space == n }
     }
 
-    // Keep the menu-bar name short enough that macOS doesn't hide the entire
-    // status item when the bar is crowded. 20 characters fits comfortably next
-    // to the icon on most setups; longer names get an ellipsis.
-    private static let maxMenuBarNameChars = 20
-
-    private func truncatedForMenuBar(_ name: String) -> String {
-        guard name.count > Self.maxMenuBarNameChars else { return name }
-        let keep = name.prefix(Self.maxMenuBarNameChars - 1)
-        return "\(keep)…"
+    // Debounce bursts of screen/occlusion notifications (e.g., during Mission
+    // Control or space transitions) so the title doesn't flicker mid-animation.
+    // Direct callers (project change, name edit) keep calling updateStatusButton()
+    // and bypass this path for immediate response.
+    private func scheduleStatusButtonUpdate() {
+        pendingStatusButtonUpdate?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.updateStatusButton()
+        }
+        pendingStatusButtonUpdate = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
     }
 
     private func updateStatusButton() {
@@ -114,11 +157,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             button.imagePosition = .imageLeft
         }
 
-        if showNameInMenuBar, let project = activeProject() {
-            button.title = " \(truncatedForMenuBar(project.name))"
-        } else {
-            button.title = ""
-        }
+        let name = activeProject()?.name ?? ""
+        availableTitleForms = MenuBarTitleFitter.progressiveForms(
+            name: name,
+            showName: showNameInMenuBar
+        )
+        currentFormIndex = 0
+        applyCurrentTitle()
+        scheduleVisibilityCheck()
 
         // Overlay the badge showing projects needing attention.
         let stateStore = ProjectStateStore.shared
@@ -133,6 +179,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             on: button,
             animating: stateStore.hasAnyWorking
         )
+    }
+
+    private func applyCurrentTitle() {
+        guard let button = statusItem.button else { return }
+        guard !availableTitleForms.isEmpty else { button.title = ""; return }
+        let idx = min(max(0, currentFormIndex), availableTitleForms.count - 1)
+        button.title = availableTitleForms[idx].displayString
+    }
+
+    // After setting a title we can't directly ask macOS "did that fit?" — but
+    // we can observe it: the status button's hosting window is either visible
+    // and positioned at a real x coordinate, or it's offscreen / occluded.
+    // Give AppKit one runloop tick to re-lay out, then shrink if hidden.
+    private func scheduleVisibilityCheck() {
+        pendingVisibilityCheck?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.shrinkIfHidden()
+        }
+        pendingVisibilityCheck = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+    }
+
+    private func shrinkIfHidden() {
+        guard isStatusItemHidden() else { return }
+        guard currentFormIndex + 1 < availableTitleForms.count else { return }
+        currentFormIndex += 1
+        applyCurrentTitle()
+        scheduleVisibilityCheck()
+    }
+
+    private func isStatusItemHidden() -> Bool {
+        guard let window = statusItem.button?.window else { return true }
+        if !window.occlusionState.contains(.visible) { return true }
+        // A hidden status item commonly has its hosting window parked at x ≤ 0
+        // (or at a negative x tucked under the notch) regardless of what the
+        // occlusion state reports.
+        if window.frame.origin.x <= 0 { return true }
+        return false
     }
 
     // MARK: - Menu
@@ -167,12 +251,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let effectiveState = project.claudeEnabled
                     ? stateStore.state(for: project.id)
                     : .idle
+
+                let choice = PreferencesStore.shared.preferences.terminalApp
+                let hasPath = !(project.path ?? "").isEmpty
+                let terminalInstalled = TerminalLauncher.isAvailable(choice)
+                let terminalEnabled = hasPath && terminalInstalled
+                let tooltip: String = {
+                    if !hasPath { return "No directory assigned" }
+                    if !terminalInstalled {
+                        return "\(choice.displayName) not installed \u{2014} change in Preferences"
+                    }
+                    return "Open \(choice.displayName) in this directory"
+                }()
+                let capturedPath = project.path
                 rowView.configure(
                     projectId: project.id,
                     name: project.name,
                     space: project.space,
                     state: effectiveState,
-                    isActive: project.space == activeSpaceNumber
+                    isActive: project.space == activeSpaceNumber,
+                    terminalEnabled: terminalEnabled,
+                    terminalTooltip: tooltip,
+                    onTerminalClick: { [weak self] in
+                        guard let path = capturedPath, !path.isEmpty else { return }
+                        TerminalLauncher.open(
+                            directoryURL: URL(fileURLWithPath: path),
+                            using: PreferencesStore.shared.preferences.terminalApp
+                        )
+                        _ = self
+                    }
                 )
                 item.view = rowView
                 item.submenu = buildSubmenu(for: project)
@@ -205,6 +312,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         showName.target = self
         showName.state = showNameInMenuBar ? .on : .off
+
+        let prefs = menu.addItem(
+            withTitle: "Preferences\u{2026}",
+            action: #selector(openPreferences),
+            keyEquivalent: ""
+        )
+        prefs.target = self
 
         let help = menu.addItem(
             withTitle: "Setup Guide",
@@ -267,6 +381,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sub.addItem(item)
                 allURLs.append(entry.url)
             }
+        }
+
+        // Directory (copy path to clipboard) — shown after Issues and PRs.
+        if let path = project.path, !path.isEmpty {
+            let header = NSMenuItem()
+            header.attributedTitle = NSAttributedString(
+                string: "Directory",
+                attributes: [.font: NSFont.boldSystemFont(ofSize: NSFont.smallSystemFontSize)]
+            )
+            header.isEnabled = false
+            sub.addItem(header)
+
+            let basename = (path as NSString).lastPathComponent
+            let label = Self.ellipsizedDirectoryLabel(basename)
+            let item = NSMenuItem(
+                title: label,
+                action: #selector(copyPath(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = path
+            item.toolTip = path
+            sub.addItem(item)
         }
 
         // Links
@@ -358,6 +495,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return label
     }
 
+    @objc private func copyPath(_ sender: NSMenuItem) {
+        guard let path = sender.representedObject as? String else { return }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(path, forType: .string)
+    }
+
+    private static let maxDirectoryLabelChars = 32
+
+    private static func ellipsizedDirectoryLabel(_ basename: String) -> String {
+        guard basename.count > maxDirectoryLabelChars else { return basename }
+        let keep = basename.prefix(maxDirectoryLabelChars - 1)
+        return "\(keep)\u{2026}"
+    }
+
     @objc private func openURL(_ sender: NSMenuItem) {
         guard let url = sender.representedObject as? URL else { return }
         NSWorkspace.shared.open(url)
@@ -381,14 +533,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             promptForAccessibility()
             return
         }
-        SpaceSwitcher.switchTo(space: project.space)
-        // Optimistically mark the clicked project's Space as active so the
-        // highlight is correct next time the menu opens, without waiting for
-        // the detector poll to pick up the switch.
-        activeSpaceNumber = project.space
-        StatusCoordinator.shared.activeSpaceBecame(project.space)
-        updateStatusButton()
-        rebuildMenu()
+        let result = SpaceSwitcher.switchTo(space: project.space)
+        switch result {
+        case .posted:
+            // Optimistically mark the clicked project's Space as active so the
+            // highlight is correct next time the menu opens, without waiting for
+            // the detector poll to pick up the switch.
+            activeSpaceNumber = project.space
+            StatusCoordinator.shared.activeSpaceBecame(project.space)
+            updateStatusButton()
+            rebuildMenu()
+        case .shortcutNotBound(let n), .unsupportedSpace(let n):
+            promptForUnboundShortcut(space: n)
+        }
     }
 
     @objc private func refreshNow() {
@@ -419,6 +576,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         editWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc func openPreferences() {
+        if preferencesWindow == nil {
+            let view = PreferencesView()
+            let host = NSHostingController(rootView: view)
+            let window = NSWindow(contentViewController: host)
+            window.title = "ProjectHub \u{2014} Preferences"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.collectionBehavior.insert(.moveToActiveSpace)
+            window.center()
+            preferencesWindow = window
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        preferencesWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func showOnboarding() {
@@ -489,6 +662,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             SpaceSwitcher.openAccessibilitySettings()
+        }
+    }
+
+    private func promptForUnboundShortcut(space n: Int) {
+        let alert = NSAlert()
+        alert.messageText = "\u{201C}Switch to Desktop \(n)\u{201D} is not enabled"
+        alert.informativeText = """
+        ProjectHub needs the "Switch to Desktop \(n)" keyboard shortcut to switch to this project's Space.
+
+        Open System Settings → Keyboard → Keyboard Shortcuts → Mission Control, and turn it on.
+        """
+        alert.addButton(withTitle: "Open Keyboard Shortcuts")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 }

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — Directory actions
+
+### Added
+
+- Adaptive menu-bar title: the active project name now shortens to the longest form that fits the available menu-bar width, falling back to icon-only before the system would otherwise hide the status item entirely. Re-evaluates on screen configuration changes, notch appearance, and occlusion-state notifications (debounced).
+- Submenu "Directory" section in each project submenu (positioned after Issues and PRs) when a directory is assigned. Shows the ellipsized folder name; clicking copies the full absolute path to the clipboard. Tooltip shows the full path.
+- Trailing terminal icon pinned to the far-right edge of each main-menu project row. Enabled when the project has a path and the configured terminal is installed; greyed out otherwise — doubling as a visual cue for projects missing a folder. Clicking opens the project directory in the configured terminal without switching Spaces.
+- Preferences window with a terminal-application picker (iTerm2 / Terminal.app). Reachable from the menu's "Preferences…" item and from the Edit Projects window. Defaults, on first launch only, to iTerm2 if installed, otherwise Terminal.app. Persisted to `~/Library/Application Support/ProjectHub/preferences.json`.
+- Space picker in the Edit Projects window now offers 1–16 (was 1–9). Spaces 10–12 use `Control+0`, `Control+-`, `Control+=` by convention; 13–16 require a user-assigned shortcut.
+- Clicking a project row whose "Switch to Desktop N" shortcut is not enabled in System Settings now shows an actionable dialog that deep-links to the Keyboard Shortcuts pane, instead of silently producing the macOS error beep.
+- Edit Projects window renders sorted ascending by Space number on each open. Rows don't reshuffle while the window is open; on-disk project order is untouched.
+
 ## v0.2.1 — Dismiss red
 
 Small follow-up: dismiss now clears red as well as yellow. Real use surfaced the case where red fires while you're already in the project's Space (the active-Space downgrade fires only on Space change, not steady-state presence), which previously stranded red until you switched away and back.

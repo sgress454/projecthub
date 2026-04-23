@@ -16,11 +16,16 @@ final class ProjectRowView: NSView {
     private let nameLabel = NSTextField(labelWithString: "")
     private let spaceLabel = NSTextField(labelWithString: "")
     private let dismissButton = NSButton()
+    private let terminalButton = NSButton()
 
     /// The project this row represents — captured in `configure(…)` so the
     /// dismiss-button action can route the click back to the coordinator
     /// without walking up through `enclosingMenuItem`.
     private var projectId: UUID?
+
+    /// Closure invoked when the trailing terminal button is clicked (only
+    /// when enabled). Cleared when the row is reconfigured.
+    private var onTerminalClick: (() -> Void)?
 
     private var isHighlighted: Bool = false {
         didSet { if isHighlighted != oldValue { needsDisplay = true } }
@@ -65,6 +70,28 @@ final class ProjectRowView: NSView {
         dismissButton.action = #selector(dismissClicked)
         dismissButton.setContentHuggingPriority(.required, for: .horizontal)
 
+        terminalButton.title = ""
+        terminalButton.image = NSImage(
+            systemSymbolName: "terminal",
+            accessibilityDescription: "Open in terminal"
+        )
+        terminalButton.image?.isTemplate = true
+        terminalButton.imageScaling = .scaleProportionallyUpOrDown
+        terminalButton.isBordered = false
+        terminalButton.bezelStyle = .inline
+        terminalButton.imagePosition = .imageOnly
+        terminalButton.setButtonType(.momentaryChange)
+        terminalButton.contentTintColor = .secondaryLabelColor
+        terminalButton.target = self
+        terminalButton.action = #selector(terminalClicked)
+        terminalButton.setContentHuggingPriority(.required, for: .horizontal)
+
+        // The terminal button lives outside the main stack so we can pin it
+        // to the row's far-right edge regardless of how much space the name
+        // and metadata need. The main stack occupies everything to its left.
+        terminalButton.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(terminalButton)
+
         let stack = NSStackView(views: [statusIndicator, nameLabel, spaceLabel, dismissButton])
         stack.orientation = .horizontal
         stack.spacing = 10
@@ -73,10 +100,14 @@ final class ProjectRowView: NSView {
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: terminalButton.leadingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             dismissButton.widthAnchor.constraint(equalToConstant: 14),
             dismissButton.heightAnchor.constraint(equalToConstant: 14),
+            terminalButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            terminalButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            terminalButton.widthAnchor.constraint(equalToConstant: 16),
+            terminalButton.heightAnchor.constraint(equalToConstant: 16),
         ])
     }
 
@@ -87,7 +118,10 @@ final class ProjectRowView: NSView {
         name: String,
         space: Int,
         state: ProjectRuntimeState,
-        isActive: Bool
+        isActive: Bool,
+        terminalEnabled: Bool = false,
+        terminalTooltip: String? = nil,
+        onTerminalClick: (() -> Void)? = nil
     ) {
         self.projectId = projectId
         statusIndicator.configure(status: state.status, working: state.working)
@@ -100,6 +134,14 @@ final class ProjectRowView: NSView {
         // Dismiss is meaningful on any attention-demanding state (red or
         // yellow). Hidden on green — nothing to clear.
         dismissButton.isHidden = (state.status == .green)
+
+        // Terminal button: visually disabled (greyed) when no path or the
+        // configured terminal isn't installed. Greyed doubles as the cue
+        // that this project is missing a folder.
+        self.onTerminalClick = onTerminalClick
+        terminalButton.isEnabled = terminalEnabled
+        terminalButton.alphaValue = terminalEnabled ? 1.0 : 0.35
+        terminalButton.toolTip = terminalTooltip
     }
 
     // MARK: - Mouse / highlight
@@ -124,19 +166,32 @@ final class ProjectRowView: NSView {
         }
     }
 
-    /// Let the dismiss button capture its own clicks instead of bubbling
-    /// into the row's `mouseUp` (which would switch Spaces). hitTest
-    /// returns the button for any point inside its visible frame.
+    /// Let the dismiss and terminal buttons capture their own clicks instead
+    /// of bubbling into the row's `mouseUp` (which would switch Spaces).
+    /// hitTest returns the button for any point inside its visible frame.
     override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point, from: superview)
+
+        if terminalButton.isEnabled {
+            let expanded = terminalButton.frame.insetBy(dx: -4, dy: -4)
+            if expanded.contains(local) {
+                return terminalButton
+            }
+        }
+
         if !dismissButton.isHidden {
-            let local = convert(point, from: superview)
-            // Give the button a generous hit zone so it's actually tappable.
             let expanded = dismissButton.frame.insetBy(dx: -4, dy: -4)
             if expanded.contains(local) {
                 return dismissButton
             }
         }
         return super.hitTest(point)
+    }
+
+    @objc private func terminalClicked() {
+        guard terminalButton.isEnabled else { return }
+        enclosingMenuItem?.menu?.cancelTracking()
+        onTerminalClick?()
     }
 
     @objc private func dismissClicked() {

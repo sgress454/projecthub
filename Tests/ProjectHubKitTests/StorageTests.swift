@@ -215,4 +215,31 @@ final class StorageTests: XCTestCase {
         let persisted = (raw["projects"] as! [[String: Any]])[0]
         XCTAssertNil(persisted["path"])
     }
+
+    // MARK: - nextAvailableSpace range
+
+    func testNextAvailableSpaceReturns10WhenSpaces1Through9AreUsed() {
+        let store = ProjectStore(fileURL: fileURL())
+        for n in 1 ... 9 {
+            store.add(name: "p\(n)", space: n)
+        }
+        XCTAssertEqual(store.nextAvailableSpace(), 10)
+    }
+
+    func testNextAvailableSpaceFindsFirstGapUpTo16() {
+        let store = ProjectStore(fileURL: fileURL())
+        // Occupy 1..12, leaving 13 as the lowest free slot.
+        for n in 1 ... 12 {
+            store.add(name: "p\(n)", space: n)
+        }
+        XCTAssertEqual(store.nextAvailableSpace(), 13)
+    }
+
+    func testNextAvailableSpaceFallsBackTo1WhenAll16AreOccupied() {
+        let store = ProjectStore(fileURL: fileURL())
+        for n in 1 ... 16 {
+            store.add(name: "p\(n)", space: n)
+        }
+        XCTAssertEqual(store.nextAvailableSpace(), 1)
+    }
 }

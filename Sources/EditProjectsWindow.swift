@@ -14,6 +14,12 @@ struct EditProjectsView: View {
     @State private var previewAfter: String = ""
     @State private var installErrorMessage: String?
 
+    // Session-local ordering: the order of IDs to display in the editor.
+    // Seeded on open from the stored order sorted ascending by Space, then
+    // left alone for the rest of the session so rows don't jump while the
+    // user edits. New projects added during the session append to the end.
+    @State private var displayOrder: [UUID] = []
+
     private let installer = HookInstaller()
 
     var body: some View {
@@ -31,7 +37,7 @@ struct EditProjectsView: View {
             }
 
             List {
-                ForEach(store.projects) { project in
+                ForEach(orderedProjects(), id: \.id) { project in
                     ProjectRow(project: project)
                         .padding(.vertical, 2)
                 }
@@ -51,6 +57,11 @@ struct EditProjectsView: View {
 
                 Spacer()
 
+                Button("Preferences\u{2026}") {
+                    (NSApp.delegate as? AppDelegate)?.openPreferences()
+                }
+                .controlSize(.small)
+
                 Text("Requires: “Switch to Desktop N” enabled · “Automatically rearrange Spaces” disabled")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -61,9 +72,13 @@ struct EditProjectsView: View {
         }
         .frame(minWidth: 520, minHeight: 400)
         .onAppear {
+            seedDisplayOrder()
             startAccessibilityPolling()
             refreshHookState()
             refreshClaudeAvailability()
+        }
+        .onChange(of: store.projects.map(\.id)) { _ in
+            syncDisplayOrder()
         }
         .onDisappear(perform: stopAccessibilityPolling)
         .sheet(isPresented: $showPreviewSheet) {
@@ -231,6 +246,56 @@ struct EditProjectsView: View {
         claudeCLIAvailable = ClaudeCLI.resolve() != nil
     }
 
+    // MARK: - Display order
+
+    private func seedDisplayOrder() {
+        // Sort by Space ascending, with stable fallback on stored index so
+        // ties don't shuffle randomly. Only touches the view-local array —
+        // the underlying store is not mutated, so the menu bar dropdown
+        // continues to iterate the stored order.
+        let stored = store.projects
+        let indexed = stored.enumerated().map { ($0.offset, $0.element) }
+        displayOrder = indexed
+            .sorted { lhs, rhs in
+                if lhs.1.space != rhs.1.space { return lhs.1.space < rhs.1.space }
+                return lhs.0 < rhs.0
+            }
+            .map { $0.1.id }
+    }
+
+    private func orderedProjects() -> [Project] {
+        let byId = Dictionary(uniqueKeysWithValues: store.projects.map { ($0.id, $0) })
+        var result: [Project] = []
+        var seen = Set<UUID>()
+        for id in displayOrder {
+            if let project = byId[id] {
+                result.append(project)
+                seen.insert(id)
+            }
+        }
+        // Any project added while the window is open (not yet in
+        // displayOrder) appends to the end. `syncDisplayOrder` keeps the
+        // state array in step after the store publishes — we only read
+        // from store here, no mutations in body.
+        for project in store.projects where !seen.contains(project.id) {
+            result.append(project)
+        }
+        return result
+    }
+
+    private func syncDisplayOrder() {
+        let storedIds = Set(store.projects.map { $0.id })
+        // Drop removed projects; keep known ordering for survivors.
+        var updated = displayOrder.filter { storedIds.contains($0) }
+        let known = Set(updated)
+        for project in store.projects where !known.contains(project.id) {
+            updated.append(project.id)
+        }
+        if updated != displayOrder {
+            displayOrder = updated
+        }
+    }
+
     // MARK: - Accessibility polling
 
     private func startAccessibilityPolling() {
@@ -267,7 +332,7 @@ private struct ProjectRow: View {
                 get: { project.space },
                 set: { store.update(id: project.id, space: $0) }
             )) {
-                ForEach(1 ... 9, id: \.self) { n in
+                ForEach(1 ... 16, id: \.self) { n in
                     Text("Space \(n)").tag(n)
                 }
             }

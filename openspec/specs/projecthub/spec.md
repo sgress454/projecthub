@@ -6,7 +6,7 @@ A macOS menu bar app that maps project names to Spaces and switches to a project
 ## Requirements
 ### Requirement: Project list persistence
 
-The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1–9.
+The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-9. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, and a cached AI summary string.
 
 #### Scenario: Saving a project survives app restart
 
@@ -20,8 +20,20 @@ The app SHALL persist a user-editable list of projects across launches. Each pro
 
 #### Scenario: Storage preserves unknown fields
 
-- **WHEN** the storage file on disk contains per-project fields not recognized by v0.1 (e.g. a `path` field added by a future version)
+- **WHEN** the storage file on disk contains per-project fields not recognized by the current version
 - **THEN** the app loads and saves without discarding those fields
+
+#### Scenario: Metadata fields persist across launches
+
+- **GIVEN** a project has GitHub issues, PRs, links, an OpenSpec change, and a cached summary
+- **WHEN** the app quits and relaunches
+- **THEN** all metadata fields are restored to their saved values
+
+#### Scenario: Metadata fields default to empty on upgrade
+
+- **GIVEN** a `projects.json` file written by v2 (no metadata fields)
+- **WHEN** the app reads the file
+- **THEN** each project loads with empty issue/PR/link lists, nil OpenSpec change, and nil summary
 
 ### Requirement: Menu bar project list
 
@@ -350,7 +362,7 @@ Each project row in the menu bar dropdown SHALL display a leading status indicat
 
 ### Requirement: Per-row dismiss control
 
-Each project row SHALL display a dismiss control (a small "×" button or equivalent affordance) when its color state is `yellow`. Clicking the control SHALL invoke the dismiss action for that project and close the menu, without switching Spaces. The control SHALL be hidden when the color state is `green` or `red`.
+Each project row SHALL display a dismiss control (a small "x" button or equivalent affordance) when its color state is `red` or `yellow`. Clicking the control SHALL invoke the dismiss action for that project and close the menu, without switching Spaces. The control SHALL be hidden when the color state is `green`.
 
 #### Scenario: Dismiss control visible on yellow
 
@@ -358,15 +370,21 @@ Each project row SHALL display a dismiss control (a small "×" button or equival
 - **WHEN** the user opens the menu bar dropdown
 - **THEN** the row shows a trailing dismiss control
 
-#### Scenario: Dismiss control hidden on non-yellow
+#### Scenario: Dismiss control visible on red
 
-- **GIVEN** a project's state is `green` or `red`
+- **GIVEN** a project's state is `red`
+- **WHEN** the user opens the menu bar dropdown
+- **THEN** the row shows a trailing dismiss control
+
+#### Scenario: Dismiss control hidden on green
+
+- **GIVEN** a project's state is `green`
 - **WHEN** the user opens the menu bar dropdown
 - **THEN** the row does NOT show a dismiss control
 
 #### Scenario: Clicking dismiss does not switch Spaces
 
-- **GIVEN** a yellow project is visible in the menu
+- **GIVEN** a red or yellow project is visible in the menu
 - **WHEN** the user clicks the dismiss control
 - **THEN** the project's state clears to green AND macOS does NOT switch to that project's Space AND the menu closes
 
@@ -441,24 +459,64 @@ The Edit Projects window SHALL provide controls for editing each project's `path
 - **WHEN** the user opens the Edit Projects window
 - **THEN** an inline warning is displayed explaining that classification will default to red
 
-### Requirement: Storage schema version 2
+### Requirement: Storage schema version 3
 
-The app SHALL write `projects.json` with `version` set to `2`, SHALL preserve existing v1 files on read without requiring migration, and SHALL continue to round-trip unknown fields per the v0.1 forward-compatibility guarantee.
+The app SHALL write `projects.json` with `version` set to `3`, SHALL preserve existing v1 and v2 files on read without requiring migration, and SHALL continue to round-trip unknown fields per the forward-compatibility guarantee.
 
-#### Scenario: New files are written with version 2
+#### Scenario: New files are written with version 3
 
 - **WHEN** the app saves the store after any edit
-- **THEN** the written file has `"version": 2` at the top level
+- **THEN** the written file has `"version": 3` at the top level
+
+#### Scenario: Version 2 files load without error
+
+- **GIVEN** a `projects.json` file with `"version": 2`
+- **WHEN** the app starts
+- **THEN** the file loads successfully, all projects are available, and metadata fields default to empty/nil
 
 #### Scenario: Version 1 files load without error
 
 - **GIVEN** a `projects.json` file with `"version": 1`
 - **WHEN** the app starts
-- **THEN** the file loads successfully, all projects are available, and `claude_enabled` is false on every project
+- **THEN** the file loads successfully, all projects are available, `claude_enabled` is false, and metadata fields default to empty/nil
 
 #### Scenario: Unknown fields are preserved
 
 - **GIVEN** a `projects.json` file contains fields not defined by the current schema
 - **WHEN** the app saves the file after an edit
 - **THEN** those unknown fields are preserved on disk
+
+### Requirement: Per-row open-in-terminal control
+
+Each project row in the menu bar dropdown SHALL display a trailing "open in terminal" control (an icon button). When clicked for a project that has a `path` assigned and the configured terminal application is available, the control SHALL open that directory in the configured terminal application and close the menu without switching Spaces. The control SHALL be shown in a visually disabled (greyed) state when the project has no `path` assigned, serving as a visual indicator that a directory is not set.
+
+#### Scenario: Control is enabled when path is set
+
+- **GIVEN** a project has a `path` assigned and the configured terminal application is resolvable
+- **WHEN** the user opens the menu bar dropdown
+- **THEN** the row shows a trailing terminal-icon control rendered in its enabled state
+
+#### Scenario: Control is disabled when no path is set
+
+- **GIVEN** a project has no `path` assigned
+- **WHEN** the user opens the menu bar dropdown
+- **THEN** the row shows a trailing terminal-icon control rendered in a greyed, disabled state, and clicking it has no effect
+
+#### Scenario: Control is disabled when configured terminal is not installed
+
+- **GIVEN** a project has a `path` assigned but the configured terminal application's bundle identifier cannot be resolved on the system
+- **WHEN** the user opens the menu bar dropdown
+- **THEN** the row shows the trailing control in a greyed, disabled state, and its tooltip indicates that the configured terminal is not installed
+
+#### Scenario: Clicking the control opens the directory in the terminal
+
+- **GIVEN** a project has a `path` assigned and the configured terminal is available
+- **WHEN** the user clicks the trailing terminal control
+- **THEN** the configured terminal application opens with a shell session rooted at the project's directory AND macOS does NOT switch to that project's Space AND the menu closes
+
+#### Scenario: Clicking the control does not switch Spaces
+
+- **GIVEN** a project is assigned to a Space other than the current one
+- **WHEN** the user clicks the trailing terminal control on that project's row
+- **THEN** the active Space is unchanged
 

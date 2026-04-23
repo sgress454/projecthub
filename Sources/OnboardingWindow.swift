@@ -23,7 +23,7 @@ struct OnboardingView: View {
             step(
                 number: 2,
                 title: "Enable “Switch to Desktop N” shortcuts",
-                body: "In Keyboard → Keyboard Shortcuts → Mission Control, turn on Switch to Desktop 1, 2, 3… These are off by default.",
+                body: "In Keyboard → Keyboard Shortcuts → Mission Control, turn on Switch to Desktop 1, 2, 3… for every Space you want ProjectHub to switch to. Most are off by default; Switch to Desktop 10–16 are never bound by macOS — if you use more than nine Spaces, assign those yourself (e.g., Control+0 for 10).",
                 buttonTitle: "Open Keyboard Shortcuts",
                 action: {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.keyboard?Shortcuts") {

@@ -153,7 +153,7 @@ public final class ProjectStore: ObservableObject {
 
     public func nextAvailableSpace() -> Int {
         let used = Set(projects.map { $0.space })
-        for n in 1 ... 9 where !used.contains(n) { return n }
+        for n in 1 ... 16 where !used.contains(n) { return n }
         return 1
     }
 
