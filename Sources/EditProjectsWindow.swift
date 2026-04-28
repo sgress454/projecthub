@@ -80,6 +80,9 @@ struct EditProjectsView: View {
         .onChange(of: store.projects.map(\.id)) { _ in
             syncDisplayOrder()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .editProjectsWindowWillShow)) { _ in
+            seedDisplayOrder()
+        }
         .onDisappear(perform: stopAccessibilityPolling)
         .sheet(isPresented: $showPreviewSheet) {
             HookPreviewSheet(

@@ -84,4 +84,40 @@ final class PreferencesStoreTests: XCTestCase {
         let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
         XCTAssertEqual(raw["terminal_app"] as? String, "iterm2")
     }
+
+    // MARK: - iTerm hotkey shortcut round-trip
+
+    func testITermHotkeyShortcutRoundTripsAcrossRestart() throws {
+        let store = PreferencesStore(fileURL: fileURL(), detectInstalled: { _ in false })
+        XCTAssertNil(store.preferences.iTermHotkeyShortcut)
+
+        // Record ⌃⌥⌘T (modifier mask example: arbitrary distinguishable value).
+        let shortcut = RecordedShortcut(keyCode: 0x11, modifierFlags: 0x140000 | 0x80000 | 0x100000)
+        store.setITermHotkeyShortcut(shortcut)
+        store.flushPendingSave()
+
+        // Simulate restart by re-creating the store on the same file.
+        let store2 = PreferencesStore(fileURL: fileURL(), detectInstalled: { _ in false })
+        XCTAssertEqual(store2.preferences.iTermHotkeyShortcut, shortcut)
+    }
+
+    func testClearingITermHotkeyShortcutRemovesField() throws {
+        let store = PreferencesStore(fileURL: fileURL(), detectInstalled: { _ in false })
+        store.setITermHotkeyShortcut(RecordedShortcut(keyCode: 17, modifierFlags: 0x100000))
+        store.flushPendingSave()
+
+        store.setITermHotkeyShortcut(nil)
+        store.flushPendingSave()
+
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        XCTAssertNil(raw["iterm_hotkey_shortcut"])
+    }
+
+    func testUnsetShortcutDoesNotWriteField() throws {
+        let store = PreferencesStore(fileURL: fileURL(), detectInstalled: { _ in false })
+        store.flushPendingSave()
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        XCTAssertNil(raw["iterm_hotkey_shortcut"])
+        XCTAssertNil(store.preferences.iTermHotkeyShortcut)
+    }
 }

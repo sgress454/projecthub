@@ -24,11 +24,11 @@
 
 ## 5. Manual verification
 
-- [ ] 5.1 On a notched display, configure a project whose name would previously hide the status item; verify the title shortens to fit or falls back to icon-only.
-- [ ] 5.2 Attach/detach an external display; verify the title re-evaluates when the main screen changes.
-- [ ] 5.3 Crowd the menu bar with other apps; verify the icon remains visible and the title shortens accordingly.
-- [ ] 5.4 Toggle the "Show project name in menu bar" preference off/on; verify the icon-only short-circuit works.
-- [ ] 5.5 Switch Spaces between projects with short and long names; verify the title swaps and re-fits without flicker.
+- [X] 5.1 On a notched display, configure a project whose name would previously hide the status item; verify the title shortens to fit or falls back to icon-only.
+- [X] 5.2 Attach/detach an external display; verify the title re-evaluates when the main screen changes.
+- [X] 5.3 Crowd the menu bar with other apps; verify the icon remains visible and the title shortens accordingly.
+- [X] 5.4 Toggle the "Show project name in menu bar" preference off/on; verify the icon-only short-circuit works.
+- [X] 5.5 Switch Spaces between projects with short and long names; verify the title swaps and re-fits without flicker.
 
 ## 6. Cleanup
 

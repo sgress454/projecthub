@@ -6,7 +6,7 @@ A macOS menu bar app that maps project names to Spaces and switches to a project
 ## Requirements
 ### Requirement: Project list persistence
 
-The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-9. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, and a cached AI summary string.
+The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-16. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, and a cached AI summary string.
 
 #### Scenario: Saving a project survives app restart
 
@@ -37,21 +37,28 @@ The app SHALL persist a user-editable list of projects across launches. Each pro
 
 ### Requirement: Menu bar project list
 
-The app SHALL show the project list in a macOS menu bar dropdown with each project's name and Space number visible at a glance.
+The app SHALL show the project list in a macOS menu bar dropdown with each project's name visible at a glance. The assigned Space number SHALL NOT be displayed in the menu bar row; it remains visible and editable in the Edit Projects window.
 
 #### Scenario: Listing projects
 
 - **WHEN** the user has configured three projects A/1, B/2, C/3 and clicks the menu bar icon
-- **THEN** the dropdown shows three rows, each with the project name and Space number
+- **THEN** the dropdown shows three rows, each with the project name
+- **AND** no row displays the text "Space 1", "Space 2", or "Space 3"
 
 #### Scenario: Empty-state
 
 - **WHEN** no projects are configured and the user clicks the menu bar icon
 - **THEN** the dropdown shows a single row inviting the user to add their first project, which opens the Edit Projects window when clicked
 
+#### Scenario: Space number remains in Edit Projects window
+
+- **GIVEN** project "api" is mapped to Space 3
+- **WHEN** the user opens the Edit Projects window
+- **THEN** the Space number "3" is displayed alongside the project's name
+
 ### Requirement: Switch to project's Space on click
 
-The app SHALL switch macOS to the assigned Space when a project row is clicked in the menu bar dropdown.
+The app SHALL switch macOS to the assigned Space when a project row is clicked in the menu bar dropdown. If the "Switch to Desktop N" keyboard shortcut required for the target Space is not enabled in macOS Keyboard Shortcuts, the app SHALL surface an actionable dialog identifying the missing shortcut and offering a deep-link to the Keyboard Shortcuts pane, rather than silently posting a keypress that macOS rejects.
 
 #### Scenario: Clicking a project switches Space
 
@@ -65,6 +72,17 @@ The app SHALL switch macOS to the assigned Space when a project row is clicked i
 - **WHEN** the user clicks a project row
 - **THEN** the app shows a dialog explaining the permission requirement and offering a button that deep-links to System Settings → Privacy & Security → Accessibility
 
+#### Scenario: Target Space shortcut is not bound
+
+- **GIVEN** the user has a project mapped to Space 9 and "Switch to Desktop 9" is disabled in System Settings → Keyboard → Keyboard Shortcuts → Mission Control
+- **WHEN** the user clicks that project's row
+- **THEN** the app displays a dialog stating that "Switch to Desktop 9" is not enabled, offers a button that deep-links to the Mission Control Keyboard Shortcuts pane, and does NOT post the `Control+9` keypress
+
+#### Scenario: Shortcut-binding check unavailable
+
+- **WHEN** the app cannot read the symbolic-hotkey preferences (e.g., defaults domain unavailable)
+- **THEN** the app posts the keypress as a best-effort fallback rather than blocking the click
+
 ### Requirement: Editing the project list
 
 The app SHALL provide a dedicated editor window for adding, renaming, removing, and reassigning projects.
@@ -72,7 +90,7 @@ The app SHALL provide a dedicated editor window for adding, renaming, removing, 
 #### Scenario: Adding a project
 
 - **WHEN** the user opens the editor and clicks the add button
-- **THEN** a new project row appears with an editable name and a Space picker for values 1–9, and the addition is persisted on edit
+- **THEN** a new project row appears with an editable name and a Space picker for values 1–16, and the addition is persisted on edit
 
 #### Scenario: Removing a project
 
@@ -86,8 +104,36 @@ The app SHALL provide a dedicated editor window for adding, renaming, removing, 
 
 #### Scenario: Space number out of range
 
-- **WHEN** the user attempts to assign a project to a Space outside 1–9
+- **WHEN** the user attempts to assign a project to a Space outside 1–16
 - **THEN** the editor prevents the assignment (the picker only offers valid values)
+
+### Requirement: Edit Projects window default sort
+
+When the Edit Projects window is opened, the project list SHALL be rendered sorted ascending by Space number, with ties broken by the project's order in the underlying store. The sort order SHALL be applied every time the window is opened; edits made while the window is open SHALL NOT cause rows to reshuffle during the session. The underlying stored order of projects SHALL NOT be modified by this sort — the menu bar dropdown and subsequent launches continue to reflect the stored order.
+
+#### Scenario: Opening the editor sorts by Space
+
+- **GIVEN** the store contains projects A/Space 3, B/Space 1, C/Space 2 in that stored order
+- **WHEN** the user opens the Edit Projects window
+- **THEN** the rows are displayed in the order B (Space 1), C (Space 2), A (Space 3)
+
+#### Scenario: Reopening the editor re-sorts by current Space
+
+- **GIVEN** the user opens the editor, changes project B's Space from 1 to 8, and closes the window
+- **WHEN** the user reopens the Edit Projects window
+- **THEN** the rows are re-sorted ascending by each project's current Space number, reflecting B's new position after C and A
+
+#### Scenario: Editing a Space number does not reshuffle the open window
+
+- **GIVEN** the Edit Projects window is open showing rows sorted by Space
+- **WHEN** the user changes a project's Space from 2 to 8
+- **THEN** the row remains in its current visual position for the remainder of the session
+
+#### Scenario: Stored order is not mutated by the editor's sort
+
+- **GIVEN** the user opens and closes the Edit Projects window without making any edits
+- **WHEN** the app subsequently reads `projects.json`
+- **THEN** the stored project order is unchanged from before the window was opened
 
 ### Requirement: Active-Space highlighting (best-effort)
 
@@ -519,4 +565,51 @@ Each project row in the menu bar dropdown SHALL display a trailing "open in term
 - **GIVEN** a project is assigned to a Space other than the current one
 - **WHEN** the user clicks the trailing terminal control on that project's row
 - **THEN** the active Space is unchanged
+
+### Requirement: Adaptive menu bar title rendering
+
+When the "Show project name in menu bar" preference is enabled and an active project is identified for the current Space, the app SHALL render the status-item label in the longest form that still fits within the available menu bar width without causing the system to hide the status item. The three forms, in descending preference, SHALL be: (a) the full project name, (b) the project name truncated at the end with a trailing ellipsis (`…`), (c) icon-only (no title text). The app SHALL fall back through these forms automatically; the status item SHALL always render at least the icon (form c) and SHALL NOT be hidden solely because its title was too long.
+
+The app SHALL re-evaluate the chosen form whenever any of the following occur: the active project changes, the active project's name is edited, the menu bar's available width changes (screen configuration change, notch/safe-area change, full-screen app enters or exits), or the status item's hosting window reports a change in occlusion state.
+
+When the "Show project name in menu bar" preference is disabled, the app SHALL render icon-only regardless of available width.
+
+#### Scenario: Full name fits
+
+- **GIVEN** the "Show project name in menu bar" preference is enabled and the active project is `"api-refactor"`
+- **AND** the menu bar has enough free width to display `" api-refactor"` alongside other status items
+- **WHEN** the app renders the status-item label
+- **THEN** the label displays the full project name `"api-refactor"`
+
+#### Scenario: Name is truncated to fit
+
+- **GIVEN** the preference is enabled and the active project is `"very-long-project-name-that-overflows"`
+- **AND** the menu bar does not have enough width for the full name but has width for a shorter string
+- **WHEN** the app renders the status-item label
+- **THEN** the label displays the project name shortened at the end with a trailing `…`, at the longest length that fits
+
+#### Scenario: Falls back to icon-only when even truncated title does not fit
+
+- **GIVEN** the preference is enabled and the available width is too narrow for any meaningful truncated name
+- **WHEN** the app renders the status-item label
+- **THEN** the label is empty and the status item shows only its icon
+- **AND** the status item is not hidden
+
+#### Scenario: Re-evaluates when screen configuration changes
+
+- **GIVEN** the app is rendering a truncated title because an external display with a wide menu bar is connected
+- **WHEN** the external display is disconnected and the main display has a notch
+- **THEN** the app re-evaluates and shortens the title further (or falls back to icon-only) so the status item remains visible
+
+#### Scenario: Re-evaluates when active project changes
+
+- **GIVEN** the current active project name fits in full
+- **WHEN** the user switches to a Space whose active project has a longer name
+- **THEN** the app re-evaluates and truncates (or falls back to icon-only) so the new name does not cause the item to be hidden
+
+#### Scenario: Preference disabled forces icon-only
+
+- **GIVEN** the "Show project name in menu bar" preference is disabled
+- **WHEN** the app renders the status-item label
+- **THEN** the label is empty regardless of available width or active project
 

@@ -3,6 +3,10 @@ import Combine
 import ProjectHubKit
 import SwiftUI
 
+extension Notification.Name {
+    static let editProjectsWindowWillShow = Notification.Name("ProjectHub.editProjectsWindowWillShow")
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var cancellables = Set<AnyCancellable>()
@@ -52,6 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Re-render the menu when preferences change so row enabled-states for
         // the terminal control update after a terminal-choice switch.
         PreferencesStore.shared.$preferences
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.rebuildMenu() }
+            .store(in: &cancellables)
+
+        // Re-render the menu when the Fleet/webpack process indicators change.
+        ProcessIndicatorService.shared.$indicators
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.rebuildMenu() }
             .store(in: &cancellables)
@@ -114,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         GitHubSync.shared.start()
         SummaryGenerator.shared.start()
+        ProcessIndicatorService.shared.start()
 
         refreshActiveSpace()
         if let n = activeSpaceNumber {
@@ -264,10 +275,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return "Open \(choice.displayName) in this directory"
                 }()
                 let capturedPath = project.path
+
+                let indicators = ProcessIndicatorService.shared.indicators[project.id]
+                let frontendTooltip: String? = {
+                    guard let webpack = indicators?.webpack else { return nil }
+                    if webpack.hasExplicitOutput {
+                        return "webpack \u{2192} \(webpack.outputDirectory)"
+                    }
+                    return "webpack \u{2192} \(project.path ?? webpack.outputDirectory)"
+                }()
+                let backendTooltip: String? = {
+                    guard let server = indicators?.server else { return nil }
+                    if let port = server.port {
+                        return "Fleet server on port \(port)"
+                    }
+                    return "Fleet server running"
+                }()
+                let onFrontendClick: (() -> Void)? = (indicators?.webpack != nil)
+                    ? { [weak self] in self?.summonITermHotkey() }
+                    : nil
+                let onBackendClick: (() -> Void)? = (indicators?.server != nil)
+                    ? { [weak self] in self?.summonITermHotkey() }
+                    : nil
+
                 rowView.configure(
                     projectId: project.id,
                     name: project.name,
-                    space: project.space,
                     state: effectiveState,
                     isActive: project.space == activeSpaceNumber,
                     terminalEnabled: terminalEnabled,
@@ -279,7 +312,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             using: PreferencesStore.shared.preferences.terminalApp
                         )
                         _ = self
-                    }
+                    },
+                    frontendIndicatorTooltip: frontendTooltip,
+                    onFrontendIndicatorClick: onFrontendClick,
+                    backendIndicatorTooltip: backendTooltip,
+                    onBackendIndicatorClick: onBackendClick
                 )
                 item.view = rowView
                 item.submenu = buildSubmenu(for: project)
@@ -576,6 +613,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate(ignoringOtherApps: true)
         editWindow?.makeKeyAndOrderFront(nil)
+        // The window is cached, so SwiftUI `onAppear` only fires on first open.
+        // Post so the view can reseed its display order each time.
+        NotificationCenter.default.post(name: .editProjectsWindowWillShow, object: nil)
     }
 
     @objc func openPreferences() {
@@ -662,6 +702,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let response = alert.runModal()
         if response == .alertFirstButtonReturn {
             SpaceSwitcher.openAccessibilitySettings()
+        }
+    }
+
+    /// Click handler shared by both process indicators. Posts the user's
+    /// configured iTerm hotkey-window keystroke; surfaces an actionable dialog
+    /// when the keystroke is unset or Accessibility permission is missing.
+    private func summonITermHotkey() {
+        switch HotkeyPoster.postITermHotkey() {
+        case .posted:
+            return
+        case .unset:
+            promptForUnsetITermHotkey()
+        case .notTrusted:
+            promptForAccessibility()
+        }
+    }
+
+    private func promptForUnsetITermHotkey() {
+        let alert = NSAlert()
+        alert.messageText = "iTerm hotkey shortcut not set"
+        alert.informativeText = """
+        ProjectHub doesn't know which keystroke summons your iTerm hotkey window.
+
+        Open Preferences and record the same chord you've configured under iTerm2 \u{2192} Settings \u{2192} Keys \u{2192} Hotkey.
+        """
+        alert.addButton(withTitle: "Open Preferences")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            openPreferences()
         }
     }
 

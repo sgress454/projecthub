@@ -3,7 +3,7 @@ import ProjectHubKit
 
 /// Custom NSView used as the content of each project `NSMenuItem`. Renders:
 ///
-///   [●  working-spinner] name (bold if active)       Space N
+///   [●  working-spinner] name (bold if active)        🎨  🌐  🖥
 ///
 /// Handles hover highlight via a tracking area, and click dispatch by
 /// cancelling the menu and firing the item's action.
@@ -14,9 +14,10 @@ import ProjectHubKit
 final class ProjectRowView: NSView {
     private let statusIndicator = StatusIndicatorView()
     private let nameLabel = NSTextField(labelWithString: "")
-    private let spaceLabel = NSTextField(labelWithString: "")
     private let dismissButton = NSButton()
     private let terminalButton = NSButton()
+    private let frontendButton = NSButton()
+    private let backendButton = NSButton()
 
     /// The project this row represents — captured in `configure(…)` so the
     /// dismiss-button action can route the click back to the coordinator
@@ -26,6 +27,12 @@ final class ProjectRowView: NSView {
     /// Closure invoked when the trailing terminal button is clicked (only
     /// when enabled). Cleared when the row is reconfigured.
     private var onTerminalClick: (() -> Void)?
+    /// Closure invoked when the 🎨 (frontend / webpack) indicator is clicked.
+    /// Cleared when the row is reconfigured.
+    private var onFrontendIndicatorClick: (() -> Void)?
+    /// Closure invoked when the 🌐 (backend / Fleet server) indicator is clicked.
+    /// Cleared when the row is reconfigured.
+    private var onBackendIndicatorClick: (() -> Void)?
 
     private var isHighlighted: Bool = false {
         didSet { if isHighlighted != oldValue { needsDisplay = true } }
@@ -49,9 +56,6 @@ final class ProjectRowView: NSView {
     private func buildSubviews() {
         nameLabel.font = NSFont.menuFont(ofSize: 0)
         nameLabel.lineBreakMode = .byTruncatingTail
-        spaceLabel.font = NSFont.menuFont(ofSize: 0)
-        spaceLabel.textColor = .secondaryLabelColor
-        spaceLabel.setContentHuggingPriority(.required, for: .horizontal)
 
         dismissButton.title = ""
         dismissButton.image = NSImage(
@@ -86,13 +90,24 @@ final class ProjectRowView: NSView {
         terminalButton.action = #selector(terminalClicked)
         terminalButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        // The terminal button lives outside the main stack so we can pin it
-        // to the row's far-right edge regardless of how much space the name
-        // and metadata need. The main stack occupies everything to its left.
-        terminalButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(terminalButton)
+        // 🎨 (frontend / webpack) and 🌐 (backend / Fleet server) indicator
+        // buttons. Hidden by default; revealed by `configure(...)` when the
+        // current process scan attributes a matching process to the project.
+        configureIndicatorButton(frontendButton, emoji: "\u{1F3A8}", action: #selector(frontendIndicatorClicked))
+        configureIndicatorButton(backendButton, emoji: "\u{1F310}", action: #selector(backendIndicatorClicked))
 
-        let stack = NSStackView(views: [statusIndicator, nameLabel, spaceLabel, dismissButton])
+        // Trailing icon cluster lives in a horizontal NSStackView pinned to
+        // the row's far-right edge. NSStackView collapses hidden arranged
+        // subviews, so a row with only the frontend indicator visible packs
+        // it directly next to the terminal icon (no empty backend slot).
+        let trailingStack = NSStackView(views: [frontendButton, backendButton, terminalButton])
+        trailingStack.orientation = .horizontal
+        trailingStack.spacing = 6
+        trailingStack.alignment = .centerY
+        trailingStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(trailingStack)
+
+        let stack = NSStackView(views: [statusIndicator, nameLabel, dismissButton])
         stack.orientation = .horizontal
         stack.spacing = 10
         stack.alignment = .centerY
@@ -100,15 +115,34 @@ final class ProjectRowView: NSView {
         addSubview(stack)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: terminalButton.leadingAnchor, constant: -10),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingStack.leadingAnchor, constant: -10),
             stack.centerYAnchor.constraint(equalTo: centerYAnchor),
             dismissButton.widthAnchor.constraint(equalToConstant: 14),
             dismissButton.heightAnchor.constraint(equalToConstant: 14),
-            terminalButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
-            terminalButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            frontendButton.widthAnchor.constraint(equalToConstant: 18),
+            frontendButton.heightAnchor.constraint(equalToConstant: 18),
+            backendButton.widthAnchor.constraint(equalToConstant: 18),
+            backendButton.heightAnchor.constraint(equalToConstant: 18),
             terminalButton.widthAnchor.constraint(equalToConstant: 16),
             terminalButton.heightAnchor.constraint(equalToConstant: 16),
+
+            trailingStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            trailingStack.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+    }
+
+    private func configureIndicatorButton(_ button: NSButton, emoji: String, action: Selector) {
+        button.title = emoji
+        button.font = NSFont.menuFont(ofSize: 0)
+        button.isBordered = false
+        button.bezelStyle = .inline
+        button.imagePosition = .noImage
+        button.setButtonType(.momentaryChange)
+        button.target = self
+        button.action = action
+        button.isHidden = true
+        button.setContentHuggingPriority(.required, for: .horizontal)
     }
 
     // MARK: - Configuration
@@ -116,12 +150,15 @@ final class ProjectRowView: NSView {
     func configure(
         projectId: UUID,
         name: String,
-        space: Int,
         state: ProjectRuntimeState,
         isActive: Bool,
         terminalEnabled: Bool = false,
         terminalTooltip: String? = nil,
-        onTerminalClick: (() -> Void)? = nil
+        onTerminalClick: (() -> Void)? = nil,
+        frontendIndicatorTooltip: String? = nil,
+        onFrontendIndicatorClick: (() -> Void)? = nil,
+        backendIndicatorTooltip: String? = nil,
+        onBackendIndicatorClick: (() -> Void)? = nil
     ) {
         self.projectId = projectId
         statusIndicator.configure(status: state.status, working: state.working)
@@ -129,7 +166,6 @@ final class ProjectRowView: NSView {
         nameLabel.font = isActive
             ? NSFont.boldSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize)
             : NSFont.menuFont(ofSize: 0)
-        spaceLabel.stringValue = "Space \(space)"
 
         // Dismiss is meaningful on any attention-demanding state (red or
         // yellow). Hidden on green — nothing to clear.
@@ -142,6 +178,17 @@ final class ProjectRowView: NSView {
         terminalButton.isEnabled = terminalEnabled
         terminalButton.alphaValue = terminalEnabled ? 1.0 : 0.35
         terminalButton.toolTip = terminalTooltip
+
+        // Process indicators: shown only when the current scan has attributed
+        // a matching process to this project. Each is its own click target
+        // (see hitTest below) — clicking does NOT switch Spaces.
+        self.onFrontendIndicatorClick = onFrontendIndicatorClick
+        frontendButton.isHidden = (onFrontendIndicatorClick == nil)
+        frontendButton.toolTip = frontendIndicatorTooltip
+
+        self.onBackendIndicatorClick = onBackendIndicatorClick
+        backendButton.isHidden = (onBackendIndicatorClick == nil)
+        backendButton.toolTip = backendIndicatorTooltip
     }
 
     // MARK: - Mouse / highlight
@@ -166,9 +213,10 @@ final class ProjectRowView: NSView {
         }
     }
 
-    /// Let the dismiss and terminal buttons capture their own clicks instead
-    /// of bubbling into the row's `mouseUp` (which would switch Spaces).
-    /// hitTest returns the button for any point inside its visible frame.
+    /// Let the dismiss, terminal, and process-indicator buttons capture their
+    /// own clicks instead of bubbling into the row's `mouseUp` (which would
+    /// switch Spaces). hitTest returns the button for any point inside its
+    /// visible frame.
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
 
@@ -176,6 +224,20 @@ final class ProjectRowView: NSView {
             let expanded = terminalButton.frame.insetBy(dx: -4, dy: -4)
             if expanded.contains(local) {
                 return terminalButton
+            }
+        }
+
+        if !backendButton.isHidden {
+            let expanded = backendButton.frame.insetBy(dx: -4, dy: -4)
+            if expanded.contains(local) {
+                return backendButton
+            }
+        }
+
+        if !frontendButton.isHidden {
+            let expanded = frontendButton.frame.insetBy(dx: -4, dy: -4)
+            if expanded.contains(local) {
+                return frontendButton
             }
         }
 
@@ -200,6 +262,16 @@ final class ProjectRowView: NSView {
         StatusCoordinator.shared.dismiss(projectId: projectId)
     }
 
+    @objc private func frontendIndicatorClicked() {
+        enclosingMenuItem?.menu?.cancelTracking()
+        onFrontendIndicatorClick?()
+    }
+
+    @objc private func backendIndicatorClicked() {
+        enclosingMenuItem?.menu?.cancelTracking()
+        onBackendIndicatorClick?()
+    }
+
     // MARK: - Drawing
 
     override func draw(_: NSRect) {
@@ -207,10 +279,8 @@ final class ProjectRowView: NSView {
             NSColor.selectedContentBackgroundColor.setFill()
             bounds.fill()
             nameLabel.textColor = .white
-            spaceLabel.textColor = .white
         } else {
             nameLabel.textColor = .labelColor
-            spaceLabel.textColor = .secondaryLabelColor
         }
     }
 }

@@ -19,14 +19,14 @@
 
 - [x] 3.1 In `Sources/EditProjectsWindow.swift`, replace the direct `ForEach(store.projects)` (around line 34) with iteration over a view-local `@State` array of project IDs captured once when the window appears, ordered ascending by `space` (stable fallback on stored index).
 - [x] 3.2 Confirm by inspection that the menu bar dropdown in `AppDelegate.swift` still iterates `store.projects` in its stored order — the sort must be local to the editor view, not a mutation of the store. (Menu bar does its own `projects.sorted(by: { $0.space < $1.space })` without mutating the store; the new editor sort is likewise view-local.)
-- [ ] 3.3 Verify manually: open the editor with projects in stored order A/3, B/1, C/2 → rows show B, C, A; change B's Space to 8 → B's row stays put until the window is closed and reopened; close and reopen → rows show C (2), A (3), B (8); on-disk `projects.json` still has the original A, B, C order.
+- [x] 3.3 Verify manually: open the editor with projects in stored order A/3, B/1, C/2 → rows show B, C, A; change B's Space to 8 → B's row stays put until the window is closed and reopened; close and reopen → rows show C (2), A (3), B (8); on-disk `projects.json` still has the original A, B, C order. — Initial implementation only re-seeded on SwiftUI `onAppear`, which the cached `editWindow` suppressed on reopen; added `editProjectsWindowWillShow` notification from `AppDelegate.openEditWindow()` + `.onReceive` in the view so re-seed now fires on every open.
 
 ## 4. Update the base `projecthub` spec
 
-- [ ] 4.1 When the change is archived, ensure `openspec/specs/projecthub/spec.md` reflects the 1–16 range in "Project list persistence" and "Editing the project list", the new unbound-shortcut scenarios under "Switch to project's Space on click", and the new "Edit Projects window default sort" requirement.
+- [x] 4.1 When the change is archived, ensure `openspec/specs/projecthub/spec.md` reflects the 1–16 range in "Project list persistence" and "Editing the project list", the new unbound-shortcut scenarios under "Switch to project's Space on click", and the new "Edit Projects window default sort" requirement.
 
 ## 5. Validate
 
 - [x] 5.1 Run `swift test` — existing tests plus the new ones in tasks 1.4 and 2.3 must pass. (101/101 passing; includes 7 new `MissionControlShortcutsTests` and 3 new `StorageTests` cases.)
-- [ ] 5.2 Manually verify in a running build: (a) picker offers 1–16; (b) assigning a project to Space 10 and clicking it with `Control+0` bound switches correctly; (c) clicking a row whose Space shortcut is disabled shows the new dialog and does not beep; (d) editor opens sorted by Space; (e) menu bar dropdown order is unchanged.
+- [x] 5.2 Manually verify in a running build: (a) picker offers 1–16; (b) assigning a project to Space 10 and clicking it with `Control+0` bound switches correctly; (c) clicking a row whose Space shortcut is disabled shows the new dialog and does not beep; (d) editor opens sorted by Space; (e) menu bar dropdown order is unchanged. — Confirmed by user in follow-up session (sort on reopen fix verified).
 - [x] 5.3 Update `CHANGELOG.md` with a user-facing note summarizing the three changes.

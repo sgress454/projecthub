@@ -23,30 +23,52 @@ public enum TerminalChoice: String, CaseIterable {
 
 public struct Preferences: Equatable {
     public var terminalApp: TerminalChoice
+    /// Optional global keystroke that summons the user's iTerm hotkey window.
+    /// Replayed via `CGEvent` when a process indicator is clicked. Unset =
+    /// click-to-summon is disabled and the indicator surfaces a dialog.
+    public var iTermHotkeyShortcut: RecordedShortcut?
     /// Round-trip bucket for fields this binary doesn't recognize.
     public var extraFields: [String: Any]
 
-    public init(terminalApp: TerminalChoice = .terminal, extraFields: [String: Any] = [:]) {
+    public init(
+        terminalApp: TerminalChoice = .terminal,
+        iTermHotkeyShortcut: RecordedShortcut? = nil,
+        extraFields: [String: Any] = [:]
+    ) {
         self.terminalApp = terminalApp
+        self.iTermHotkeyShortcut = iTermHotkeyShortcut
         self.extraFields = extraFields
     }
 
     public static func == (lhs: Preferences, rhs: Preferences) -> Bool {
         lhs.terminalApp == rhs.terminalApp
+            && lhs.iTermHotkeyShortcut == rhs.iTermHotkeyShortcut
     }
 
     public func toDictionary() -> [String: Any] {
         var dict = extraFields
         dict["terminal_app"] = terminalApp.rawValue
+        if let shortcut = iTermHotkeyShortcut {
+            dict["iterm_hotkey_shortcut"] = shortcut.toDictionary()
+        } else {
+            dict.removeValue(forKey: "iterm_hotkey_shortcut")
+        }
         return dict
     }
 
     public static func fromDictionary(_ dict: [String: Any]) -> Preferences {
         var extras = dict
         extras.removeValue(forKey: "terminal_app")
+        extras.removeValue(forKey: "iterm_hotkey_shortcut")
         let choice = (dict["terminal_app"] as? String)
             .flatMap(TerminalChoice.init(rawValue:)) ?? .terminal
-        return Preferences(terminalApp: choice, extraFields: extras)
+        let shortcut = (dict["iterm_hotkey_shortcut"] as? [String: Any])
+            .flatMap(RecordedShortcut.fromDictionary)
+        return Preferences(
+            terminalApp: choice,
+            iTermHotkeyShortcut: shortcut,
+            extraFields: extras
+        )
     }
 }
 
@@ -105,6 +127,12 @@ public final class PreferencesStore: ObservableObject {
         scheduleSave()
     }
 
+    public func setITermHotkeyShortcut(_ shortcut: RecordedShortcut?) {
+        guard preferences.iTermHotkeyShortcut != shortcut else { return }
+        preferences.iTermHotkeyShortcut = shortcut
+        scheduleSave()
+    }
+
     public func flushPendingSave() {
         saveWorkItem?.cancel()
         saveWorkItem = nil
@@ -130,6 +158,7 @@ public final class PreferencesStore: ObservableObject {
         var extras = raw
         extras.removeValue(forKey: "version")
         extras.removeValue(forKey: "terminal_app")
+        extras.removeValue(forKey: "iterm_hotkey_shortcut")
         self.extraTopLevelFields = extras
     }
 
