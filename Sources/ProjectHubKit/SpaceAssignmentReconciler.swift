@@ -22,6 +22,10 @@ public enum SpaceAssignmentReconciler {
     public static func reconcile(projects: [Project], shape: SpaceShape) -> [Project] {
         guard !shape.isEmpty else { return projects }
         return projects.map { project in
+            // Archived projects are out of band — they carry `space = 0` and
+            // `spaceID64 = nil` (the "no positional assignment" shape) and
+            // should never be lazy-captured or renumbered.
+            if project.archived { return project }
             var copy = project
             if let cached = project.spaceID64 {
                 if let newPosition = shape.position(of: cached), newPosition != project.space {
@@ -34,13 +38,24 @@ public enum SpaceAssignmentReconciler {
         }
     }
 
-    /// Project IDs whose cached `spaceID64` is set but no longer present in
-    /// `shape` — i.e. the assigned macOS Space has been removed.
+    /// Project IDs that should render in the unassigned-active state — visible
+    /// in the menu bar as disabled, click opens the editor. Two cases:
+    /// 1. `spaceID64` set but missing from `shape` (the project's macOS Space
+    ///    was removed).
+    /// 2. `space == 0` (the "no positional assignment" sentinel set by
+    ///    `Project.archive()` and retained by `Project.restore()`; the user
+    ///    needs to pick a Space before the project becomes useful in the bar).
+    /// Archived projects are not returned — they have their own section.
     /// Empty when `shape` is empty (we don't punish projects when CGS is mute).
     public static func unassignedIDs(projects: [Project], shape: SpaceShape) -> Set<UUID> {
         guard !shape.isEmpty else { return [] }
         var result: Set<UUID> = []
         for project in projects {
+            if project.archived { continue }
+            if project.space == 0 {
+                result.insert(project.id)
+                continue
+            }
             guard let cached = project.spaceID64 else { continue }
             if shape.position(of: cached) == nil {
                 result.insert(project.id)

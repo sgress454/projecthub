@@ -284,4 +284,124 @@ final class StorageTests: XCTestCase {
         let persisted = (raw["projects"] as! [[String: Any]])[0]
         XCTAssertNil(persisted["space_id64"])
     }
+
+    // MARK: - Archive round-trip (v4)
+
+    func testArchiveRoundTripPreservesMetadataAndStripsSpaceFields() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "wrap-up", space: 4)
+        let id = store.projects[0].id
+        store.setPath(id: id, path: "/Users/scott/old-project")
+        store.setClaudeEnabled(id: id, enabled: true)
+        store.setSpace(id: id, space: 4, spaceID64: 0xABCD)
+        store.setLinks(id: id, links: [
+            LabeledLink(url: URL(string: "https://example.com")!, label: "docs"),
+        ])
+        store.setOpenspecChange(id: id, change: "old-change")
+        store.setSummary(id: id, summary: "Wrapping up.")
+
+        store.archive(id: id)
+        store.flushPendingSave()
+
+        let reloaded = ProjectStore(fileURL: fileURL())
+        let project = reloaded.projects[0]
+        XCTAssertTrue(project.archived)
+        XCTAssertNotNil(project.archivedAt)
+        XCTAssertEqual(project.space, 0, "archive sets space to 0 sentinel")
+        XCTAssertNil(project.spaceID64)
+        XCTAssertNil(project.path)
+        XCTAssertFalse(project.claudeEnabled)
+        // Metadata preserved.
+        XCTAssertEqual(project.name, "wrap-up")
+        XCTAssertEqual(project.links.count, 1)
+        XCTAssertEqual(project.openspecChange, "old-change")
+        XCTAssertEqual(project.summary, "Wrapping up.")
+    }
+
+    func testRestoreRoundTripClearsArchiveFields() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "back", space: 2)
+        let id = store.projects[0].id
+        store.archive(id: id)
+        store.flushPendingSave()
+
+        // Confirm archive landed before restore.
+        let mid = ProjectStore(fileURL: fileURL())
+        XCTAssertTrue(mid.projects[0].archived)
+
+        mid.restore(id: id)
+        mid.flushPendingSave()
+
+        let reloaded = ProjectStore(fileURL: fileURL())
+        let project = reloaded.projects[0]
+        XCTAssertFalse(project.archived)
+        XCTAssertNil(project.archivedAt)
+        // space stays at 0 (unassigned-active) — user picks a Space via the picker.
+        XCTAssertEqual(project.space, 0)
+        XCTAssertNil(project.spaceID64)
+    }
+
+    func testPreArchiveFilesLoadWithoutArchivedFields() throws {
+        // A v3 file written before archive-project has no archived / archived_at.
+        let payload: [String: Any] = [
+            "version": 3,
+            "projects": [
+                ["id": UUID().uuidString, "name": "legacy", "space": 1],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: payload, options: []).write(to: fileURL())
+
+        let store = ProjectStore(fileURL: fileURL())
+        XCTAssertEqual(store.projects.count, 1)
+        XCTAssertFalse(store.projects[0].archived)
+        XCTAssertNil(store.projects[0].archivedAt)
+    }
+
+    func testArchivedFieldsOmittedFromJSONWhenDefault() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "fresh", space: 1)
+        store.flushPendingSave()
+
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        let persisted = (raw["projects"] as! [[String: Any]])[0]
+        XCTAssertNil(persisted["archived"])
+        XCTAssertNil(persisted["archived_at"])
+    }
+
+    func testArchivedProjectsSortedLastArchivedFirst() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "first", space: 1)
+        store.add(name: "second", space: 2)
+        store.add(name: "third", space: 3)
+        let firstID = store.projects[0].id
+        let secondID = store.projects[1].id
+        let thirdID = store.projects[2].id
+
+        // Archive in order: first, then second, then third.
+        // ProjectStore.archive uses Date() internally so we need real time
+        // gaps; sleep briefly between archives to keep timestamps strict.
+        store.archive(id: firstID)
+        Thread.sleep(forTimeInterval: 0.01)
+        store.archive(id: secondID)
+        Thread.sleep(forTimeInterval: 0.01)
+        store.archive(id: thirdID)
+        store.flushPendingSave()
+
+        let reloaded = ProjectStore(fileURL: fileURL())
+        let archivedNames = reloaded.archivedProjects.map(\.name)
+        XCTAssertEqual(archivedNames, ["third", "second", "first"])
+    }
+
+    func testActiveProjectsExcludesArchived() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "keep", space: 1)
+        store.add(name: "shelve", space: 2)
+        let shelveID = store.projects[1].id
+        store.archive(id: shelveID)
+        store.flushPendingSave()
+
+        XCTAssertEqual(store.activeProjects.map(\.name), ["keep"])
+        XCTAssertEqual(store.archivedProjects.map(\.name), ["shelve"])
+        XCTAssertEqual(store.projects.count, 2, "underlying storage retains both")
+    }
 }

@@ -109,4 +109,55 @@ final class SpaceAssignmentReconcilerTests: XCTestCase {
         )
         XCTAssertTrue(unassigned.isEmpty)
     }
+
+    // MARK: - Archive invariants
+
+    func testReconcileSkipsArchivedProjects() {
+        // An archived project must never be touched by reconcile, even if its
+        // `space` happens to be a valid position. Without the archived guard,
+        // the lazy-capture path would re-assign its `spaceID64` to whatever's
+        // currently at that position — likely another active project's id.
+        let archived = Project(name: "old", space: 0).archive()
+        let active = project(name: "current", space: 2, id64: 200)
+        let s = shape([(1, 100), (2, 200), (3, 300)])
+        let updated = SpaceAssignmentReconciler.reconcile(
+            projects: [archived, active], shape: s
+        )
+        XCTAssertEqual(updated[0], archived, "archived project must round-trip unchanged")
+        XCTAssertEqual(updated[1].spaceID64, 200)
+    }
+
+    func testReconcileSkipsArchivedProjectWithLegacyStaleSpace() {
+        // Defensive: even if an archived project somehow has `space != 0` (e.g.
+        // a hand-edited file), reconcile must not lazy-capture for it.
+        var rogue = project(name: "rogue", space: 3)
+        rogue.archived = true
+        rogue.archivedAt = Date()
+        let s = shape([(1, 100), (2, 200), (3, 300)])
+        let updated = SpaceAssignmentReconciler.reconcile(projects: [rogue], shape: s)
+        XCTAssertNil(updated[0].spaceID64, "archived guard prevents lazy capture")
+        XCTAssertEqual(updated[0].space, 3)
+    }
+
+    func testUnassignedIDsIncludesSpaceZeroProjects() {
+        // Restored projects have `space = 0, spaceID64 = nil` until the user
+        // picks a Space. They must render as unassigned-active.
+        let restored = Project(name: "restored", space: 0)
+        let active = project(name: "active", space: 1, id64: 10)
+        let s = shape([(1, 10), (2, 20)])
+        let unassigned = SpaceAssignmentReconciler.unassignedIDs(
+            projects: [restored, active], shape: s
+        )
+        XCTAssertEqual(unassigned, [restored.id])
+    }
+
+    func testUnassignedIDsExcludesArchivedProjects() {
+        // Archived projects are their own state — not unassigned-active.
+        let archived = Project(name: "old", space: 0).archive()
+        let s = shape([(1, 10)])
+        let unassigned = SpaceAssignmentReconciler.unassignedIDs(
+            projects: [archived], shape: s
+        )
+        XCTAssertTrue(unassigned.isEmpty)
+    }
 }

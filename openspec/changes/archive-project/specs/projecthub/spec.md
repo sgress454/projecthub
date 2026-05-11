@@ -2,7 +2,7 @@
 
 ### Requirement: Project list persistence
 
-The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-16. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, a cached stable Space identifier (`space_id64`), and an `archived` boolean (default false). Archived projects retain their identity and metadata but SHALL have no `space`, `space_id64`, `path`, or `claude_enabled`.
+The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-16. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, a cached stable Space identifier (`space_id64`), an `archived` boolean (default false), and an `archived_at` ISO8601 timestamp (set when the project is archived, nil otherwise). Archived projects retain their identity and metadata but SHALL have no `space`, `space_id64`, `path`, or `claude_enabled`.
 
 #### Scenario: Saving a project survives app restart
 
@@ -47,13 +47,19 @@ The app SHALL persist a user-editable list of projects across launches. Each pro
 
 - **GIVEN** a project archived with name, links, GitHub issues, GitHub PRs, OpenSpec change, and summary
 - **WHEN** the app saves and reloads `projects.json`
-- **THEN** the project loads with `archived = true`, all metadata intact, and `space`, `space_id64`, `path`, `claude_enabled` all empty/false
+- **THEN** the project loads with `archived = true`, `archived_at` set to the original archive moment, all metadata intact, and `space`, `space_id64`, `path`, `claude_enabled` all empty/false
 
-#### Scenario: Pre-upgrade files load without archived
+#### Scenario: archived_at preserves ordering across launches
 
-- **GIVEN** a `projects.json` file written before close-project
+- **GIVEN** two projects archived at different times (project A at T, project B at T+1)
+- **WHEN** the app saves and reloads `projects.json`
+- **THEN** both projects load with their original `archived_at` values intact, and the archived list orders B before A (last-archived-first)
+
+#### Scenario: Pre-archive files load without archived
+
+- **GIVEN** a `projects.json` file written before archive-project
 - **WHEN** the app reads the file
-- **THEN** each project loads with `archived = false` and no error is raised
+- **THEN** each project loads with `archived = false` and `archived_at = nil`, and no error is raised
 
 ### Requirement: Menu bar project list
 
@@ -106,19 +112,20 @@ The app SHALL provide a dedicated editor window for adding, renaming, removing, 
 - **WHEN** the user attempts to assign a project to a Space outside 1–16
 - **THEN** the editor prevents the assignment (the picker only offers valid values)
 
-#### Scenario: Closing a project from the editor
+#### Scenario: Archiving a project from the editor
 
-- **WHEN** the user clicks "Close…" on an active project's row in Edit Projects
-- **THEN** the close-project flow begins (see the close-project capability)
+- **GIVEN** an active project is visible in Edit Projects
+- **WHEN** the user clicks "Archive" on that project's row
+- **THEN** the project is immediately archived (no confirmation dialog), its row disappears from the active list, and it appears at the top of the Archived section
 
 #### Scenario: Archived section lists archived projects
 
 - **GIVEN** the user has archived one or more projects
 - **WHEN** the user opens Edit Projects
-- **THEN** an "Archived" section is visible (collapsed by default) listing each archived project with name and a Restore action
+- **THEN** an "Archived" section is visible (collapsed by default) listing each archived project with name and a Restore action, ordered by `archived_at` descending (last-archived-first)
 
 #### Scenario: Restoring an archived project
 
 - **GIVEN** an archived project is visible in the Archived section
 - **WHEN** the user clicks Restore
-- **THEN** the project's `archived` flag clears, the project becomes unassigned (no Space, no path), and the user is prompted to pick a Space
+- **THEN** the project's `archived` flag clears, `archived_at` clears, the project returns to the active list as unassigned (no Space, no path), and remains hidden from the menu bar until the user assigns a Space via the row's Space picker

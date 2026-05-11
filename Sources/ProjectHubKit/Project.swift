@@ -27,6 +27,17 @@ public struct Project: Identifiable, Equatable {
     public var openspecChange: String?
     public var summary: String?
 
+    // MARK: - Archive fields (v4)
+
+    /// When true, the project is set aside: hidden from the menu bar, shown
+    /// only in the Archived section of Edit Projects, and excluded from all
+    /// Space-related code paths. Combined with `space = 0` and `spaceID64 = nil`
+    /// to express the "no positional assignment" shape.
+    public var archived: Bool
+    /// Moment the project was archived (ISO8601 on disk). Used to order the
+    /// Archived section last-archived-first. Cleared by `restore()`.
+    public var archivedAt: Date?
+
     public init(
         id: UUID = UUID(),
         name: String,
@@ -39,7 +50,9 @@ public struct Project: Identifiable, Equatable {
         githubPRs: [GitHubPREntry] = [],
         links: [LabeledLink] = [],
         openspecChange: String? = nil,
-        summary: String? = nil
+        summary: String? = nil,
+        archived: Bool = false,
+        archivedAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -53,6 +66,8 @@ public struct Project: Identifiable, Equatable {
         self.links = links
         self.openspecChange = openspecChange
         self.summary = summary
+        self.archived = archived
+        self.archivedAt = archivedAt
     }
 
     public static func == (lhs: Project, rhs: Project) -> Bool {
@@ -67,6 +82,34 @@ public struct Project: Identifiable, Equatable {
             && lhs.links == rhs.links
             && lhs.openspecChange == rhs.openspecChange
             && lhs.summary == rhs.summary
+            && lhs.archived == rhs.archived
+            && lhs.archivedAt == rhs.archivedAt
+    }
+
+    /// Returns a copy in the archived shape: hidden from the menu bar,
+    /// excluded from all Space-related code paths, identity and metadata
+    /// preserved. `space = 0` is the "no positional assignment" sentinel —
+    /// it falls below the 1..16 range used everywhere else, so reconcile/
+    /// switch/highlight code naturally skips it.
+    public func archive(now: Date = Date()) -> Project {
+        var copy = self
+        copy.archived = true
+        copy.archivedAt = now
+        copy.space = 0
+        copy.spaceID64 = nil
+        copy.path = nil
+        copy.claudeEnabled = false
+        return copy
+    }
+
+    /// Returns a copy with the archive state cleared. The project re-enters
+    /// the unassigned-active state (`space = 0`, `spaceID64 = nil` from the
+    /// prior archive); the user picks a Space from the row's Space picker.
+    public func restore() -> Project {
+        var copy = self
+        copy.archived = false
+        copy.archivedAt = nil
+        return copy
     }
 
     public func toDictionary() -> [String: Any] {
@@ -113,6 +156,18 @@ public struct Project: Identifiable, Equatable {
             dict.removeValue(forKey: "summary")
         }
 
+        // Archive fields — omit when default (matches omit-when-empty pattern).
+        if archived {
+            dict["archived"] = true
+        } else {
+            dict.removeValue(forKey: "archived")
+        }
+        if let archivedAt {
+            dict["archived_at"] = Self.archivedAtFormatter.string(from: archivedAt)
+        } else {
+            dict.removeValue(forKey: "archived_at")
+        }
+
         return dict
     }
 
@@ -131,9 +186,13 @@ public struct Project: Identifiable, Equatable {
         let openspecChange = dict["openspec_change"] as? String
         let summary = dict["summary"] as? String
 
+        let archived = (dict["archived"] as? Bool) ?? false
+        let archivedAt = (dict["archived_at"] as? String).flatMap(Self.archivedAtFormatter.date(from:))
+
         var extras = dict
         for key in ["name", "space", "id", "space_id64", "path", "claude_enabled",
-                     "github_issues", "github_prs", "links", "openspec_change", "summary"] {
+                     "github_issues", "github_prs", "links", "openspec_change", "summary",
+                     "archived", "archived_at"] {
             extras.removeValue(forKey: key)
         }
         return Project(
@@ -148,7 +207,17 @@ public struct Project: Identifiable, Equatable {
             githubPRs: githubPRs,
             links: links,
             openspecChange: openspecChange,
-            summary: summary
+            summary: summary,
+            archived: archived,
+            archivedAt: archivedAt
         )
     }
+
+    /// ISO8601 with timezone offset and fractional seconds — durable across
+    /// timezones and stable enough to preserve archive ordering.
+    private static let archivedAtFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 }

@@ -39,6 +39,22 @@ public final class ProjectStore: ObservableObject {
     @Published public private(set) var projects: [Project] = []
     @Published public private(set) var settings: Settings = Settings()
 
+    /// Projects visible in the menu bar and treated as live by Space-related
+    /// code paths. Archived projects are filtered out.
+    public var activeProjects: [Project] {
+        projects.filter { !$0.archived }
+    }
+
+    /// Projects in the archived state, ordered last-archived-first so the
+    /// Archived section in Edit Projects surfaces recent archives at the top.
+    /// Projects without an `archivedAt` (defensive — shouldn't happen for a
+    /// project produced via `archive()`) sort to the bottom.
+    public var archivedProjects: [Project] {
+        projects
+            .filter { $0.archived }
+            .sorted { ($0.archivedAt ?? .distantPast) > ($1.archivedAt ?? .distantPast) }
+    }
+
     /// Current on-disk schema version written by this binary.
     /// v1 files (name + space only) still load correctly — the extra fields
     /// simply take their defaults.
@@ -175,6 +191,24 @@ public final class ProjectStore: ObservableObject {
     public func setSummary(id: UUID, summary: String?) {
         guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
         projects[idx].summary = summary
+        scheduleSave()
+    }
+
+    // MARK: - Archive API (v4)
+
+    /// Archive a project: sets the archived flag with a timestamp and clears
+    /// Space, path, and Claude monitoring. Identity and metadata are preserved.
+    public func archive(id: UUID) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx] = projects[idx].archive()
+        scheduleSave()
+    }
+
+    /// Restore an archived project to the unassigned-active state. The user
+    /// then assigns a Space via the row's Space picker.
+    public func restore(id: UUID) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx] = projects[idx].restore()
         scheduleSave()
     }
 
