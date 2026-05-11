@@ -12,6 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private var activeSpaceNumber: Int?
     private var spaceChangeObserver: NSObjectProtocol?
+    /// Project IDs whose cached `spaceID64` is no longer present in the
+    /// current macOS Spaces shape — recomputed alongside reconciliation,
+    /// read by menu rendering to surface the disabled "reassign" state.
+    private var unassignedProjectIDs: Set<UUID> = []
 
     private var editWindow: NSWindow?
     private var onboardingWindow: NSWindow?
@@ -68,7 +72,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // macOS pushes an event whenever the active Space changes — from us,
         // from Ctrl+N, from Mission Control, from trackpad swipes. Use it to
-        // keep the highlight current without polling.
+        // keep the highlight current without polling. Mission Control
+        // round-trips through this notification, so it also covers the
+        // add/remove/reorder cases the reconciler cares about.
         spaceChangeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
@@ -76,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             guard let self else { return }
             self.refreshActiveSpace()
+            self.reconcileSpaceAssignments()
             if let n = self.activeSpaceNumber {
                 StatusCoordinator.shared.activeSpaceBecame(n)
             }
@@ -127,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProcessIndicatorService.shared.start()
 
         refreshActiveSpace()
+        reconcileSpaceAssignments()
         if let n = activeSpaceNumber {
             StatusCoordinator.shared.activeSpaceBecame(n)
         }
@@ -236,6 +244,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         activeSpaceNumber = SpaceDetector.currentSpaceNumber()
     }
 
+    /// Pull the latest Spaces shape from CGS, run the reconciler against the
+    /// current store contents, and apply the result. Also updates the cached
+    /// `unassignedProjectIDs` set used by menu rendering. No-op when CGS is
+    /// unavailable (`shape` empty) — see the reconciler for why.
+    private func reconcileSpaceAssignments() {
+        let shape = SpaceDetector.currentShape()
+        let projects = ProjectStore.shared.projects
+        let updated = SpaceAssignmentReconciler.reconcile(projects: projects, shape: shape)
+        ProjectStore.shared.applyReconciliation(updated)
+        // Compute unassigned IDs from the post-reconciliation snapshot —
+        // lazy capture during reconcile may have just populated id64s.
+        unassignedProjectIDs = SpaceAssignmentReconciler.unassignedIDs(
+            projects: ProjectStore.shared.projects, shape: shape
+        )
+    }
+
     private func rebuildMenu() {
         let menu = NSMenu()
         menu.delegate = self
@@ -298,11 +322,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     ? { [weak self] in self?.summonITermHotkey() }
                     : nil
 
+                let isUnassigned = unassignedProjectIDs.contains(project.id)
                 rowView.configure(
                     projectId: project.id,
                     name: project.name,
                     state: effectiveState,
-                    isActive: project.space == activeSpaceNumber,
+                    isActive: !isUnassigned && project.space == activeSpaceNumber,
+                    isUnassigned: isUnassigned,
                     terminalEnabled: terminalEnabled,
                     terminalTooltip: tooltip,
                     onTerminalClick: { [weak self] in
@@ -566,6 +592,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let project = ProjectStore.shared.projects.first(where: { $0.id == id })
         else { return }
 
+        // Unassigned projects (cached id64 missing from current Spaces shape)
+        // skip the Space-switch path entirely and route the click into Edit
+        // Projects so the user can pick a fresh Space.
+        if unassignedProjectIDs.contains(project.id) {
+            openEditWindow()
+            return
+        }
+
         if !SpaceSwitcher.hasAccessibility() {
             promptForAccessibility()
             return
@@ -762,6 +796,7 @@ extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_: NSMenu) {
         // Safety refresh on open; the notification handler normally keeps this in sync.
         refreshActiveSpace()
+        reconcileSpaceAssignments()
         updateStatusButton()
         rebuildMenu()
     }

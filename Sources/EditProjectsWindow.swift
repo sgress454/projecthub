@@ -333,7 +333,14 @@ private struct ProjectRow: View {
 
             Picker("", selection: Binding(
                 get: { project.space },
-                set: { store.update(id: project.id, space: $0) }
+                set: { newSpace in
+                    // Capture the current id64 at this position when one
+                    // exists; otherwise leave nil and let lazy capture in
+                    // the reconciler fill it in once the user creates that
+                    // Space in macOS.
+                    let id64 = SpaceDetector.currentShape().id(at: newSpace)
+                    store.setSpace(id: project.id, space: newSpace, spaceID64: id64)
+                }
             )) {
                 ForEach(1 ... 16, id: \.self) { n in
                     Text("Space \(n)").tag(n)

@@ -152,6 +152,7 @@ final class ProjectRowView: NSView {
         name: String,
         state: ProjectRuntimeState,
         isActive: Bool,
+        isUnassigned: Bool = false,
         terminalEnabled: Bool = false,
         terminalTooltip: String? = nil,
         onTerminalClick: (() -> Void)? = nil,
@@ -162,10 +163,17 @@ final class ProjectRowView: NSView {
     ) {
         self.projectId = projectId
         statusIndicator.configure(status: state.status, working: state.working)
-        nameLabel.stringValue = name
+        nameLabel.stringValue = isUnassigned ? "\(name) \u{2014} Space removed" : name
         nameLabel.font = isActive
             ? NSFont.boldSystemFont(ofSize: NSFont.menuFont(ofSize: 0).pointSize)
             : NSFont.menuFont(ofSize: 0)
+        // Unassigned rows are clickable (to open the editor) but render
+        // visually muted so the broken state is obvious at a glance.
+        nameLabel.alphaValue = isUnassigned ? 0.55 : 1.0
+        statusIndicator.alphaValue = isUnassigned ? 0.55 : 1.0
+        toolTip = isUnassigned
+            ? "This project's Space was removed. Click to reassign in Edit Projects."
+            : nil
 
         // Dismiss is meaningful on any attention-demanding state (red or
         // yellow). Hidden on green — nothing to clear.

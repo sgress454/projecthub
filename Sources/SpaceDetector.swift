@@ -1,4 +1,5 @@
 import Foundation
+import ProjectHubKit
 
 // MARK: - Private CoreGraphics (Skylight) symbols
 //
@@ -17,9 +18,7 @@ enum SpaceDetector {
     /// Best-effort: returns the currently active Space's index (1-based) within its display,
     /// or nil if it can't be determined (multi-display edge cases, private API drift, etc.).
     static func currentSpaceNumber() -> Int? {
-        let cid = CGSMainConnectionID()
-        guard let unmanaged = CGSCopyManagedDisplaySpaces(cid) else { return nil }
-        guard let displays = unmanaged.takeRetainedValue() as? [[String: Any]] else { return nil }
+        guard let displays = copyDisplays() else { return nil }
 
         for display in displays {
             guard let spaces = display["Spaces"] as? [[String: Any]] else { continue }
@@ -33,6 +32,20 @@ enum SpaceDetector {
             }
         }
         return nil
+    }
+
+    /// Returns the current Spaces shape (positional 1-based index → stable id64),
+    /// flattened across displays in the same order `currentSpaceNumber` walks.
+    /// Returns an empty shape if CGS is unavailable.
+    static func currentShape() -> SpaceShape {
+        guard let displays = copyDisplays() else { return SpaceShape(entries: []) }
+        return SpaceShape.parse(displays: displays)
+    }
+
+    private static func copyDisplays() -> [[String: Any]]? {
+        let cid = CGSMainConnectionID()
+        guard let unmanaged = CGSCopyManagedDisplaySpaces(cid) else { return nil }
+        return unmanaged.takeRetainedValue() as? [[String: Any]]
     }
 
     private static func spaceId(from dict: [String: Any]?) -> UInt64? {

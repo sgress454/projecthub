@@ -94,6 +94,33 @@ public final class ProjectStore: ObservableObject {
         scheduleSave()
     }
 
+    /// Atomic update of a project's positional `space` and its cached
+    /// `spaceID64`. Used by the editor's Space picker so the two fields stay
+    /// consistent (id64 reflects the current position at write time). Pass
+    /// `spaceID64: nil` when the chosen position has no live id64 yet — lazy
+    /// capture during reconciliation will fill it in later.
+    public func setSpace(id: UUID, space: Int, spaceID64: UInt64?) {
+        guard let idx = projects.firstIndex(where: { $0.id == id }) else { return }
+        projects[idx].space = space
+        projects[idx].spaceID64 = spaceID64
+        scheduleSave()
+    }
+
+    /// Replace every project with its reconciled counterpart from `updated`.
+    /// Triggers a save only if any project actually changed, so the no-op
+    /// path on every Space-change notification doesn't churn the JSON file.
+    public func applyReconciliation(_ updated: [Project]) {
+        guard updated.count == projects.count else { return }
+        var didChange = false
+        for (i, replacement) in updated.enumerated() {
+            if projects[i] != replacement {
+                projects[i] = replacement
+                didChange = true
+            }
+        }
+        if didChange { scheduleSave() }
+    }
+
     /// Sets (or clears, with nil) the filesystem path for a project.
     /// Also runs OpenSpec auto-detection if no change is manually set.
     public func setPath(id: UUID, path: String?) {

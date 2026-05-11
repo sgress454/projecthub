@@ -242,4 +242,46 @@ final class StorageTests: XCTestCase {
         }
         XCTAssertEqual(store.nextAvailableSpace(), 1)
     }
+
+    // MARK: - space_id64 round-trip
+
+    func testSpaceID64RoundTrips() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "proj", space: 2)
+        let id = store.projects[0].id
+        store.setSpace(id: id, space: 2, spaceID64: 0xDEAD_BEEF_CAFE)
+        store.flushPendingSave()
+
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        let persisted = (raw["projects"] as! [[String: Any]])[0]
+        XCTAssertEqual((persisted["space_id64"] as? NSNumber)?.uint64Value, 0xDEAD_BEEF_CAFE)
+
+        let reloaded = ProjectStore(fileURL: fileURL())
+        XCTAssertEqual(reloaded.projects.first?.spaceID64, 0xDEAD_BEEF_CAFE)
+    }
+
+    func testPreUpgradeFilesLoadWithoutSpaceID64() throws {
+        // A v3 file written before stable-space-tracking has no space_id64 field.
+        let payload: [String: Any] = [
+            "version": 3,
+            "projects": [
+                ["id": UUID().uuidString, "name": "alpha", "space": 1],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: payload, options: []).write(to: fileURL())
+
+        let store = ProjectStore(fileURL: fileURL())
+        XCTAssertEqual(store.projects.count, 1)
+        XCTAssertNil(store.projects[0].spaceID64)
+    }
+
+    func testSpaceID64NilOmittedFromJSON() throws {
+        let store = ProjectStore(fileURL: fileURL())
+        store.add(name: "proj", space: 1)
+        store.flushPendingSave()
+
+        let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: fileURL())) as! [String: Any]
+        let persisted = (raw["projects"] as! [[String: Any]])[0]
+        XCTAssertNil(persisted["space_id64"])
+    }
 }
