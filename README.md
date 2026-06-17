@@ -1,8 +1,8 @@
-# ProjectHub
+# Fleet Buddy (aka ProjectHub)
 
 A macOS menu bar app that labels your Spaces by project name, switches to a project's Space in one click, and surfaces per-project context — Claude Code session state, GitHub PRs/issues, an AI status summary, and running Fleet/webpack processes — so you know at a glance which project needs your attention.
 
-macOS lets you assign one Space per project (and teleport between them with `Ctrl+N`), but does not let you *label* Spaces — so "which Space is which?" breaks down past two or three projects. And without a signal, a permission prompt or a Claude question in another Space can sit unaddressed for an hour. ProjectHub closes both gaps, then adds the per-project context you'd otherwise hunt across Spaces and terminal windows to find.
+macOS lets you assign one Space per project (and teleport between them with `Ctrl+N`), but does not let you *label* Spaces — so "which Space is which?" breaks down past two or three projects. And without a signal, a permission prompt or a Claude question in another Space can sit unaddressed for an hour. Fleet Buddy closes both gaps, then adds the per-project context you'd otherwise hunt across Spaces and terminal windows to find.
 
 ## What it does
 
@@ -38,7 +38,7 @@ You attach issues, PRs, links, and an OpenSpec change through a per-project meta
 
 ### GitHub sync
 
-Background PR auto-discovery: for each project with a git repo, ProjectHub queries the `gh` CLI for PRs on the current branch and caches their title, state, and unresolved-comment count, on an adaptive polling cadence. Degrades silently when `gh` is missing or unauthenticated.
+Background PR auto-discovery: for each project with a git repo, Fleet Buddy queries the `gh` CLI for PRs on the current branch and caches their title, state, and unresolved-comment count, on an adaptive polling cadence. Degrades silently when `gh` is missing or unauthenticated.
 
 ### Open in terminal
 
@@ -46,7 +46,7 @@ Each project row has a trailing terminal icon. Click it to open the project's di
 
 ### Fleet process indicators
 
-For Fleet development, ProjectHub scans running processes and tags the owning project's row with:
+For Fleet development, Fleet Buddy scans running processes and tags the owning project's row with:
 
 - 🌐 — a Fleet server (`*/build/fleet serve`); hover shows the listening port.
 - 🎨 — a webpack build (`webpack --progress`/`--watch`); hover shows the output directory.
@@ -83,7 +83,7 @@ This builds a release binary to `~/.local/bin/projecthub`, signs it with a stabl
 3. Flip the per-project Claude toggle on (disabled until the path is set).
 4. Flip the global **Claude status monitoring** toggle at the top — review the preview of changes to `~/.claude/settings.json`, then confirm.
 
-That writes a small bash hook into `~/.claude/settings.json` (for the `Stop`, `Notification`, `UserPromptSubmit`, and `PostToolUse` events) that appends events to `~/Library/Application Support/ProjectHub/events.jsonl`. ProjectHub watches that file and updates the menu.
+That writes a small bash hook into `~/.claude/settings.json` (for the `Stop`, `Notification`, `UserPromptSubmit`, and `PostToolUse` events) that appends events to `~/Library/Application Support/ProjectHub/events.jsonl`. Fleet Buddy watches that file and updates the menu.
 
 Flip the global toggle off any time to remove the hook. Your own hooks and settings are preserved.
 
@@ -115,7 +115,7 @@ The state only ever changes on one of these triggers — no silent timeouts, no 
 
 ## Privacy
 
-ProjectHub has no analytics, telemetry, or network calls of its own. Data leaves your machine only through the CLIs you opt into, using your existing auth:
+Fleet Buddy has no analytics, telemetry, or network calls of its own. Data leaves your machine only through the CLIs you opt into, using your existing auth:
 
 - **`claude`** — when Claude status is enabled, the final assistant message of each Stop event is sent to `claude -p` to classify it as QUESTION / REPORT / DONE. AI summaries send project context (OpenSpec proposal, recent git log, PR status) to `claude -p`. If `claude` isn't installed or fails, the project is flagged red (conservatively) and no call is made.
 - **`gh`** — GitHub sync queries your repositories through the `gh` CLI's GitHub authentication.
