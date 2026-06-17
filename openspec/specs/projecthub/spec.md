@@ -6,7 +6,7 @@ A macOS menu bar app that maps project names to Spaces and switches to a project
 ## Requirements
 ### Requirement: Project list persistence
 
-The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-16. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, and a cached stable Space identifier (`space_id64`) used to track the project's Space across reorderings or removals.
+The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and a Space number (in the range 0-16; the value 0 is reserved as the "no positional assignment" sentinel for unassigned-active and archived projects, while 1-16 are real macOS Space positions). Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, a cached stable Space identifier (`space_id64`), an `archived` boolean (default false), and an `archived_at` ISO8601 timestamp (set when the project is archived, nil otherwise). Archived projects retain their identity and metadata but SHALL have `space = 0`, no `space_id64`, no `path`, and `claude_enabled = false`, so they are excluded from all Space-related code paths (switch, active-highlight, lazy-capture, hook routing).
 
 #### Scenario: Saving a project survives app restart
 
@@ -47,9 +47,27 @@ The app SHALL persist a user-editable list of projects across launches. Each pro
 - **WHEN** the app reads the file
 - **THEN** each project loads with `space_id64` absent, and no error is raised
 
+#### Scenario: Archived projects round-trip metadata
+
+- **GIVEN** a project archived with name, links, GitHub issues, GitHub PRs, OpenSpec change, and summary
+- **WHEN** the app saves and reloads `projects.json`
+- **THEN** the project loads with `archived = true`, `archived_at` set to the original archive moment, all metadata intact, `space = 0`, `space_id64` absent, `path` absent, and `claude_enabled = false`
+
+#### Scenario: archived_at preserves ordering across launches
+
+- **GIVEN** two projects archived at different times (project A at T, project B at T+1)
+- **WHEN** the app saves and reloads `projects.json`
+- **THEN** both projects load with their original `archived_at` values intact, and the archived list orders B before A (last-archived-first)
+
+#### Scenario: Pre-archive files load without archived
+
+- **GIVEN** a `projects.json` file written before archive-project
+- **WHEN** the app reads the file
+- **THEN** each project loads with `archived = false` and `archived_at = nil`, and no error is raised
+
 ### Requirement: Menu bar project list
 
-The app SHALL show the project list in a macOS menu bar dropdown with each project's name visible at a glance. The assigned Space number SHALL NOT be displayed in the menu bar row; it remains visible and editable in the Edit Projects window.
+The app SHALL show the project list in a macOS menu bar dropdown with each project's name visible at a glance. The assigned Space number SHALL NOT be displayed in the menu bar row; it remains visible and editable in the Edit Projects window. Archived projects SHALL NOT appear in the menu bar list.
 
 #### Scenario: Listing projects
 
@@ -67,6 +85,12 @@ The app SHALL show the project list in a macOS menu bar dropdown with each proje
 - **GIVEN** project "api" is mapped to Space 3
 - **WHEN** the user opens the Edit Projects window
 - **THEN** the Space number "3" is displayed alongside the project's name
+
+#### Scenario: Archived projects are excluded from the menu
+
+- **GIVEN** the user has two active projects and one archived project
+- **WHEN** the user clicks the menu bar icon
+- **THEN** the dropdown shows only the two active projects and no row for the archived one
 
 ### Requirement: Switch to project's Space on click
 
@@ -103,7 +127,7 @@ The app SHALL switch macOS to the assigned Space when a project row is clicked i
 
 ### Requirement: Editing the project list
 
-The app SHALL provide a dedicated editor window for adding, renaming, removing, and reassigning projects.
+The app SHALL provide a dedicated editor window for adding, renaming, removing, reassigning, archiving, and restoring projects. Archived projects SHALL be presented in a dedicated section, separate from active projects.
 
 #### Scenario: Adding a project
 
@@ -124,6 +148,24 @@ The app SHALL provide a dedicated editor window for adding, renaming, removing, 
 
 - **WHEN** the user attempts to assign a project to a Space outside 1–16
 - **THEN** the editor prevents the assignment (the picker only offers valid values)
+
+#### Scenario: Archiving a project from the editor
+
+- **GIVEN** an active project is visible in Edit Projects
+- **WHEN** the user clicks "Archive" on that project's row
+- **THEN** the project is immediately archived (no confirmation dialog), its row disappears from the active list, and it appears at the top of the Archived section
+
+#### Scenario: Archived section lists archived projects
+
+- **GIVEN** the user has archived one or more projects
+- **WHEN** the user opens Edit Projects
+- **THEN** an "Archived" section is visible (collapsed by default) listing each archived project with name and a Restore action, ordered by `archived_at` descending (last-archived-first)
+
+#### Scenario: Restoring an archived project
+
+- **GIVEN** an archived project is visible in the Archived section
+- **WHEN** the user clicks Restore
+- **THEN** the project's `archived` flag clears, `archived_at` clears, the project returns to the active list in the unassigned-active state (`space = 0`, `spaceID64 = nil`, no path), is rendered in the menu bar as a disabled row consistent with the existing unassigned treatment, and the user assigns a Space via the row's Space picker to make it usable
 
 ### Requirement: Edit Projects window default sort
 

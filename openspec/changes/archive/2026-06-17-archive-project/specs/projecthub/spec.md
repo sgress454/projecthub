@@ -2,7 +2,7 @@
 
 ### Requirement: Project list persistence
 
-The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and an assigned Space number in the range 1-16. Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, a cached stable Space identifier (`space_id64`), an `archived` boolean (default false), and an `archived_at` ISO8601 timestamp (set when the project is archived, nil otherwise). Archived projects retain their identity and metadata but SHALL have no `space`, `space_id64`, `path`, or `claude_enabled`.
+The app SHALL persist a user-editable list of projects across launches. Each project has at minimum a human-readable name and a Space number (in the range 0-16; the value 0 is reserved as the "no positional assignment" sentinel for unassigned-active and archived projects, while 1-16 are real macOS Space positions). Each project MAY additionally have: a list of GitHub issue URLs, a list of GitHub PR URLs (with a flag distinguishing manually-added from auto-discovered), a list of labeled links (URL + label), an OpenSpec change name, a cached AI summary string, a cached stable Space identifier (`space_id64`), an `archived` boolean (default false), and an `archived_at` ISO8601 timestamp (set when the project is archived, nil otherwise). Archived projects retain their identity and metadata but SHALL have `space = 0`, no `space_id64`, no `path`, and `claude_enabled = false`, so they are excluded from all Space-related code paths (switch, active-highlight, lazy-capture, hook routing).
 
 #### Scenario: Saving a project survives app restart
 
@@ -47,7 +47,7 @@ The app SHALL persist a user-editable list of projects across launches. Each pro
 
 - **GIVEN** a project archived with name, links, GitHub issues, GitHub PRs, OpenSpec change, and summary
 - **WHEN** the app saves and reloads `projects.json`
-- **THEN** the project loads with `archived = true`, `archived_at` set to the original archive moment, all metadata intact, and `space`, `space_id64`, `path`, `claude_enabled` all empty/false
+- **THEN** the project loads with `archived = true`, `archived_at` set to the original archive moment, all metadata intact, `space = 0`, `space_id64` absent, `path` absent, and `claude_enabled = false`
 
 #### Scenario: archived_at preserves ordering across launches
 
@@ -128,4 +128,4 @@ The app SHALL provide a dedicated editor window for adding, renaming, removing, 
 
 - **GIVEN** an archived project is visible in the Archived section
 - **WHEN** the user clicks Restore
-- **THEN** the project's `archived` flag clears, `archived_at` clears, the project returns to the active list as unassigned (no Space, no path), and remains hidden from the menu bar until the user assigns a Space via the row's Space picker
+- **THEN** the project's `archived` flag clears, `archived_at` clears, the project returns to the active list in the unassigned-active state (`space = 0`, `spaceID64 = nil`, no path), is rendered in the menu bar as a disabled row consistent with the existing unassigned treatment, and the user assigns a Space via the row's Space picker to make it usable

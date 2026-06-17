@@ -22,9 +22,24 @@ The original proposal bundled this with auto-closing the project's windows. Wind
 
 ### Decision: Archive is metadata-only; Space-related fields are stripped
 
-`archived = true` clears `space`, `space_id64`, `path`, and `claude_enabled`. Preserved fields: `id`, `name`, `github_issues`, `github_prs`, `links`, `openspec_change`, `summary`. The user retains "what this project was about" without any active monitoring or windowing state.
+`archived = true` sets `space = 0` (the "no positional assignment" sentinel — see the next decision), clears `space_id64`, `path`, and `claude_enabled`. Preserved fields: `id`, `name`, `github_issues`, `github_prs`, `links`, `openspec_change`, `summary`. The user retains "what this project was about" without any active monitoring or windowing state.
 
 **Rationale:** Archive is "remember it for later," not "hibernate it." Re-acquiring the Space and path on Restore is cheap and matches the user's mental model. Stripping `claude_enabled` in particular avoids confusing state where archived projects continue to participate in hook routing.
+
+### Decision: `space = 0` is the "no positional assignment" sentinel; unassigned states are unified
+
+`Project.space` is non-optional (`Int`), inherited from stable-space-tracking which models unassigned-by-id64 rather than unassigned-by-space. Rather than widening the data model to `Int?` (which would ripple through the reconciler, EditProjectsWindow, AppDelegate, and StatusCoordinator), `archive()` writes `space = 0`. Position numbers are 1..16 everywhere else in the codebase, so 0 naturally falls below the floor: `SpaceShape.id(at: 0)` returns nil, `nextAvailableSpace()` doesn't enumerate it, and Space-switching comparisons (`project.space == activeSpaceNumber`, where the right side is always ≥1) never match.
+
+A post-Restore project carries `space = 0, spaceID64 = nil, archived = false`. To render this without a parallel "unassigned-restored" state, `SpaceAssignmentReconciler.unassignedIDs` is extended to return any project with `space == 0` in addition to the existing case (`spaceID64` set but missing from `shape`). Both cases produce the same disabled-in-menu-bar, click-opens-editor behavior already defined by stable-space-tracking.
+
+The reconciler also skips archived projects entirely in `reconcile()` — defensive, since active code paths should never pass them in, but it prevents lazy-capture from silently reassigning a freshly-archived project's `spaceID64` to whatever's currently at its (already-cleared) position.
+
+**Rationale:** One sentinel value, one unassigned-rendering path, zero new fields, minimal blast radius. The trade-off is a magic-number-shaped Int, mitigated by `archive()` and the reconciler comments stating the convention explicitly.
+
+**Alternatives considered:**
+- Make `space: Int?` optional. Rejected: ripples through every site that reads `project.space`, with no behavioral payoff over the sentinel.
+- Add a separate `spaceAssignmentCleared: Bool` field. Rejected: another field to round-trip; mostly redundant with `archived || space == 0`.
+- Use `space = -1` or a negative sentinel. Rejected: 0 sits naturally below the 1..16 range and is what `SpaceShape.id(at:)` already treats as "no such position."
 
 ### Decision: Add `archived_at` for ordering
 
@@ -48,9 +63,9 @@ Clicking the Archive button archives the project immediately. There is no "Are y
 
 ### Decision: Restore returns to unassigned-active; no Space-picker prompt
 
-Restore clears `archived` and `archived_at`. The project re-enters the unassigned-active state (per `stable-space-tracking`): visible in Edit Projects but not in the menu bar, awaiting Space assignment. The user picks a Space from the Space picker that's already on every active row.
+Restore clears `archived` and `archived_at` only. `space` stays at 0 and `spaceID64` stays nil, carried forward from the archived state. The project re-enters the unassigned-active state (per `stable-space-tracking`, extended above to include `space == 0`): visible in Edit Projects, rendered as a disabled row in the menu bar with a hint that the project needs a Space assignment. The user picks a Space from the Space picker that's already on every active row, which calls `setSpace(id:space:spaceID64:)` and lifts the project out of the unassigned state.
 
-**Rationale:** No new UI for a rare action. The Space picker already lives on the row and already handles the unassigned → assigned transition.
+**Rationale:** No new UI for a rare action. The Space picker already lives on the row and already handles the unassigned → assigned transition. Reusing the disabled-row treatment means one mental model for "this project has no Space assigned right now," whether that's because the user just restored it or because macOS removed its Space.
 
 ### Decision: Archive lives in Edit Projects, not the menu bar dropdown
 
