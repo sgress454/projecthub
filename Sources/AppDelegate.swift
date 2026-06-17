@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let projects = ProjectStore.shared.projects
+        let projects = ProjectStore.shared.activeProjects
         if projects.isEmpty {
             let empty = menu.addItem(
                 withTitle: "Add your first project…",

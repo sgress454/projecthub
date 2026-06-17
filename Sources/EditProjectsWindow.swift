@@ -14,11 +14,15 @@ struct EditProjectsView: View {
     @State private var previewAfter: String = ""
     @State private var installErrorMessage: String?
 
-    // Session-local ordering: the order of IDs to display in the editor.
-    // Seeded on open from the stored order sorted ascending by Space, then
-    // left alone for the rest of the session so rows don't jump while the
-    // user edits. New projects added during the session append to the end.
+    // Session-local ordering: the order of IDs to display in the active
+    // section of the editor. Seeded on open from the stored order sorted
+    // ascending by Space, then left alone for the rest of the session so
+    // rows don't jump while the user edits. New projects added during the
+    // session append to the end. Archived projects use their own intrinsic
+    // order (last-archived-first) and aren't part of this array.
     @State private var displayOrder: [UUID] = []
+
+    @State private var archivedSectionExpanded: Bool = false
 
     private let installer = HookInstaller()
 
@@ -40,6 +44,18 @@ struct EditProjectsView: View {
                 ForEach(orderedProjects(), id: \.id) { project in
                     ProjectRow(project: project)
                         .padding(.vertical, 2)
+                }
+
+                if !store.archivedProjects.isEmpty {
+                    DisclosureGroup(isExpanded: $archivedSectionExpanded) {
+                        ForEach(store.archivedProjects, id: \.id) { project in
+                            ArchivedProjectRow(project: project)
+                                .padding(.vertical, 2)
+                        }
+                    } label: {
+                        Text("Archived (\(store.archivedProjects.count))")
+                            .foregroundColor(.secondary)
+                    }
                 }
             }
             .listStyle(.inset)
@@ -77,7 +93,10 @@ struct EditProjectsView: View {
             refreshHookState()
             refreshClaudeAvailability()
         }
-        .onChange(of: store.projects.map(\.id)) { _ in
+        .onChange(of: store.activeProjects.map(\.id)) { _ in
+            // Watching the active-set IDs (not store.projects) so archive/
+            // restore — which leave the underlying array unchanged but flip
+            // the `archived` flag — also triggers a sync.
             syncDisplayOrder()
         }
         .onReceive(NotificationCenter.default.publisher(for: .editProjectsWindowWillShow)) { _ in
@@ -252,11 +271,11 @@ struct EditProjectsView: View {
     // MARK: - Display order
 
     private func seedDisplayOrder() {
-        // Sort by Space ascending, with stable fallback on stored index so
-        // ties don't shuffle randomly. Only touches the view-local array —
-        // the underlying store is not mutated, so the menu bar dropdown
-        // continues to iterate the stored order.
-        let stored = store.projects
+        // Sort active projects by Space ascending, with stable fallback on
+        // stored index so ties don't shuffle randomly. Archived projects
+        // are excluded — they live in their own section, sorted by
+        // archivedAt descending.
+        let stored = store.activeProjects
         let indexed = stored.enumerated().map { ($0.offset, $0.element) }
         displayOrder = indexed
             .sorted { lhs, rhs in
@@ -267,7 +286,8 @@ struct EditProjectsView: View {
     }
 
     private func orderedProjects() -> [Project] {
-        let byId = Dictionary(uniqueKeysWithValues: store.projects.map { ($0.id, $0) })
+        let active = store.activeProjects
+        let byId = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
         var result: [Project] = []
         var seen = Set<UUID>()
         for id in displayOrder {
@@ -276,22 +296,21 @@ struct EditProjectsView: View {
                 seen.insert(id)
             }
         }
-        // Any project added while the window is open (not yet in
-        // displayOrder) appends to the end. `syncDisplayOrder` keeps the
-        // state array in step after the store publishes — we only read
-        // from store here, no mutations in body.
-        for project in store.projects where !seen.contains(project.id) {
+        // Any project added (or restored) during the session that's not
+        // yet in displayOrder appends to the end. `syncDisplayOrder` keeps
+        // the state array in step after the store publishes.
+        for project in active where !seen.contains(project.id) {
             result.append(project)
         }
         return result
     }
 
     private func syncDisplayOrder() {
-        let storedIds = Set(store.projects.map { $0.id })
-        // Drop removed projects; keep known ordering for survivors.
-        var updated = displayOrder.filter { storedIds.contains($0) }
+        let activeIds = Set(store.activeProjects.map { $0.id })
+        // Drop removed-or-archived projects; keep known ordering for survivors.
+        var updated = displayOrder.filter { activeIds.contains($0) }
         let known = Set(updated)
-        for project in store.projects where !known.contains(project.id) {
+        for project in store.activeProjects where !known.contains(project.id) {
             updated.append(project.id)
         }
         if updated != displayOrder {
@@ -377,6 +396,14 @@ private struct ProjectRow: View {
             )
 
             Button {
+                store.archive(id: project.id)
+            } label: {
+                Image(systemName: "archivebox")
+            }
+            .buttonStyle(.borderless)
+            .help("Archive project (sets it aside; restorable from the Archived section)")
+
+            Button {
                 store.remove(id: project.id)
             } label: {
                 Image(systemName: "minus.circle")
@@ -388,6 +415,52 @@ private struct ProjectRow: View {
             MetadataEditView(projectId: project.id)
         }
     }
+}
+
+private struct ArchivedProjectRow: View {
+    let project: Project
+    @ObservedObject private var store = ProjectStore.shared
+    @State private var showMetadata = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(project.name)
+                .frame(minWidth: 100, maxWidth: .infinity, alignment: .leading)
+                .foregroundColor(.secondary)
+
+            if let archivedAt = project.archivedAt {
+                Text(Self.relativeFormatter.localizedString(for: archivedAt, relativeTo: Date()))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .help("Archived \(archivedAt.formatted(date: .abbreviated, time: .shortened))")
+            }
+
+            Button {
+                showMetadata = true
+            } label: {
+                Image(systemName: "info.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("View metadata (read-only browse while archived)")
+
+            Button {
+                store.restore(id: project.id)
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .help("Restore to active list (you'll pick a Space to reassign)")
+        }
+        .sheet(isPresented: $showMetadata) {
+            MetadataEditView(projectId: project.id)
+        }
+    }
+
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f
+    }()
 }
 
 /// A small "Path: …" control that opens an NSOpenPanel when clicked. Shows
